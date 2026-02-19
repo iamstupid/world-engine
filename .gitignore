@@ -1,0 +1,7 @@
+build/
+output/
+output_*/
+test_output/
+*.user
+*.suo
+*.vcxproj.user
