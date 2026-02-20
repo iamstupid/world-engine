@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorldEngine - Geodesic Terrain Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Pako for gzip decompression of FILD payloads -->
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+
+    <!-- ES Module import map for Three.js -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <!-- Side panel with controls -->
+    <aside id="side-panel">
+        <h1 class="panel-title">WorldEngine</h1>
+        <hr>
+
+        <!-- Parameter controls are injected here by parameter_panel.js -->
+        <div id="parameter-controls"></div>
+
+        <hr>
+
+        <!-- View switcher -->
+        <div id="view-switcher">
+            <label class="section-label">View</label>
+            <div class="button-group">
+                <button id="btn-globe" class="view-btn active">Globe</button>
+                <button id="btn-map" class="view-btn">Map</button>
+            </div>
+        </div>
+
+        <hr>
+
+        <div id="status-bar">
+            <span id="status-text">Ready</span>
+        </div>
+    </aside>
+
+    <!-- Main viewport -->
+    <main id="viewport">
+        <!-- Three.js renderer mounts here -->
+        <div id="renderer-container"></div>
+
+        <!-- 2D map overlay canvas (hidden by default) -->
+        <canvas id="map-canvas"></canvas>
+    </main>
+
+    <!-- Application entry point -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
