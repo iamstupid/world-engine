@@ -9,7 +9,8 @@ import { MapView } from './renderer/views/map_view.js';
 import { TERRAIN_COLORMAP } from './renderer/colormap.js';
 import { ParameterPanel } from './ui/parameter_panel.js';
 import { ViewSwitcher } from './ui/view_switcher.js';
-import { getMeshInfo, generateNoise, getFieldData, parseFILD } from './api/client.js';
+import { generateNoise, getFieldData, parseFILD } from './api/client.js';
+import { IcoGeodesicMesh } from './renderer/geometry/icosahedral_geodesic.js';
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -89,21 +90,28 @@ async function generateWorld(params) {
     setStatus('Fetching mesh...');
 
     try {
-        // Step 1: Get the icosahedral mesh topology
-        const meshData = await getMeshInfo(params.N);
-        currentMeshData = meshData;
-        globeView.setMesh(meshData);
+        // Step 1: Build the icosahedral mesh client-side
+        const icoMesh = new IcoGeodesicMesh(params.N);
+        currentMeshData = {
+            positions: icoMesh.getPositions(),  // Float32Array (numCells * 3)
+            faces: icoMesh.getFaces(),          // Uint32Array (numFaces * 3)
+            num_cells: icoMesh.totalCells,
+        };
+        globeView.setMesh(currentMeshData);
 
         setStatus('Generating terrain...');
 
         // Step 2: Generate noise-based terrain
         const genResult = await generateNoise({
-            N:              params.N,
-            seed:           params.seed,
-            octaves:        params.octaves,
-            frequency:      params.frequency,
-            warp:           params.warp,
-            ocean_fraction: params.ocean_fraction,
+            mesh_type: 'ico',
+            N: params.N,
+            noise: {
+                seed:           params.seed,
+                octaves:        params.octaves,
+                frequency:      params.frequency,
+                warp_amplitude: params.warp,
+                ocean_fraction: params.ocean_fraction,
+            },
         });
 
         currentWorldId = genResult.world_id;

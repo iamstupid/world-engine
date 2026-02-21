@@ -26,7 +26,7 @@ export class MapView {
     render(meshData, fieldData, colormap = TERRAIN_COLORMAP) {
         if (!meshData || !fieldData) return;
 
-        const { vertices, faces } = meshData;
+        const { positions, faces, num_cells } = meshData;
         const canvas = this.canvas;
         const ctx = this.ctx;
 
@@ -42,20 +42,21 @@ export class MapView {
         const pixels = imageData.data;
 
         // Build a coverage buffer to track which pixels have been painted.
-        // Initialize to -Infinity so we can detect unpainted pixels.
         const valueBuffer = new Float32Array(width * height).fill(NaN);
 
         // For each face, compute its center, convert to lat/lon, then to pixel coords.
-        const numFaces = faces.length;
+        const numFaces = faces.length / 3;
         const isPerFace = fieldData.length === numFaces;
 
         for (let f = 0; f < numFaces; f++) {
-            const [i0, i1, i2] = faces[f];
+            const i0 = faces[f * 3];
+            const i1 = faces[f * 3 + 1];
+            const i2 = faces[f * 3 + 2];
 
-            // Face center
-            const cx = (vertices[i0][0] + vertices[i1][0] + vertices[i2][0]) / 3;
-            const cy = (vertices[i0][1] + vertices[i1][1] + vertices[i2][1]) / 3;
-            const cz = (vertices[i0][2] + vertices[i1][2] + vertices[i2][2]) / 3;
+            // Face center from flat positions array
+            const cx = (positions[i0 * 3] + positions[i1 * 3] + positions[i2 * 3]) / 3;
+            const cy = (positions[i0 * 3 + 1] + positions[i1 * 3 + 1] + positions[i2 * 3 + 1]) / 3;
+            const cz = (positions[i0 * 3 + 2] + positions[i1 * 3 + 2] + positions[i2 * 3 + 2]) / 3;
 
             // Convert to spherical coordinates
             const r = Math.sqrt(cx * cx + cy * cy + cz * cz);
