@@ -28,3 +28,17 @@ struct Adjacency {
     int idx;
     float distance;
 };
+
+// Mesh concept — any type with value_type, iterator, num_cells, operator[], begin/end
+#include <concepts>
+
+template<typename M>
+concept Mesh = requires(M m, const M cm, int i) {
+    typename M::value_type;
+    typename M::iterator;
+    { cm.num_cells() } -> std::convertible_to<int>;
+    { m[i] }           -> std::same_as<typename M::value_type&>;
+    { cm[i] }          -> std::same_as<const typename M::value_type&>;
+    { m.begin() }      -> std::same_as<typename M::iterator>;
+    { m.end() }        -> std::same_as<typename M::iterator>;
+};

@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
-#include "mesh/icosahedral_geodesic.hpp"
-#include "noise/noise_generator.hpp"
+#include "legacy/mesh/icosahedral_geodesic.hpp"
+#include "legacy/noise/noise_generator.hpp"
+using namespace legacy;
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"

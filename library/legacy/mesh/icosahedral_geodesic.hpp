@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cmath>
 #include <cassert>
-#include "mesh_concept.hpp"
+#include "mesh/mesh_concept.hpp"
+
+namespace legacy {
 
 class IcoMesh {
 public:
@@ -104,3 +106,5 @@ private:
 // Warp constants for coupled polynomial warp
 constexpr float WARP_ALPHA = 0.5372f;
 constexpr float WARP_BETA  = -0.4637f;
+
+} // namespace legacy

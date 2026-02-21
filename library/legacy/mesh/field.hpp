@@ -5,6 +5,8 @@
 #include <cmath>
 #include <numeric>
 
+namespace legacy {
+
 template<typename Mesh>
 struct Field {
     const Mesh* mesh;
@@ -57,3 +59,5 @@ struct Field {
             v += offset;
     }
 };
+
+} // namespace legacy

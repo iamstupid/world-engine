@@ -1,13 +1,12 @@
 #include "noise_generator.hpp"
-#include "FastNoiseLite.h"
 #include <algorithm>
 #include <cmath>
 
-template<Mesh M>
-M generate_noise(const typename M::topology_type* topo, const NoiseParams& params)
-    requires std::same_as<typename M::value_type, float>
-{
-    M field(topo, "elevation");
+namespace legacy {
+
+template<typename Mesh>
+Field<Mesh> generate_noise(const Mesh& mesh, const NoiseParams& params) {
+    Field<Mesh> field(&mesh, "elevation");
 
     FastNoiseLite noise;
     noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
@@ -26,14 +25,13 @@ M generate_noise(const typename M::topology_type* topo, const NoiseParams& param
         warp.SetFrequency(params.frequency * 0.5f);
     }
 
-    // Hot loop: iterator provides division-free position access
-    for (auto it = field.begin(); it != field.end(); ++it) {
-        Vec3f p = it.position();
+    for (int i = 0; i < mesh.num_cells(); i++) {
+        Vec3f p = mesh.cell_position(i);
         float x = p.x, y = p.y, z = p.z;
         if (params.warp_amplitude > 0) {
             warp.DomainWarp(x, y, z);
         }
-        *it = noise.GetNoise(x, y, z);
+        field[i] = noise.GetNoise(x, y, z);
     }
 
     // Shift so ocean_fraction quantile lands at zero
@@ -45,12 +43,14 @@ M generate_noise(const typename M::topology_type* topo, const NoiseParams& param
     float abyss = field.min_val();
     float scale = std::max(std::abs(peak), std::abs(abyss));
     if (scale > 1e-6f) {
-        for (int i = 0; i < field.num_cells(); i++)
+        for (int i = 0; i < field.size(); i++)
             field[i] /= scale;
     }
 
     return field;
 }
 
-// Explicit instantiation
-template IcoMesh<float> generate_noise<IcoMesh<float>>(const IcoTopology*, const NoiseParams&);
+// Explicit template instantiation
+template Field<IcoMesh> generate_noise(const IcoMesh& mesh, const NoiseParams& params);
+
+} // namespace legacy

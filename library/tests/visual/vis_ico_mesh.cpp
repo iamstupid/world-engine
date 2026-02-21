@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cmath>
-#include "mesh/icosahedral_geodesic.hpp"
+#include "legacy/mesh/icosahedral_geodesic.hpp"
+using namespace legacy;
 
 // Export IcoMesh as OBJ for visual inspection in MeshLab/Blender
 void export_obj(const char* filename, int N) {

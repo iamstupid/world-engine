@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cmath>
-#include "mesh/icosahedral_geodesic.hpp"
+#include "legacy/mesh/icosahedral_geodesic.hpp"
+using namespace legacy;
 
 int main() {
     int N = 2;

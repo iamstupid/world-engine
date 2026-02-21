@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstring>
 
+namespace legacy {
+
 // ============================================================
 // Construction
 // ============================================================
@@ -568,3 +570,5 @@ void IcoMesh::build_positions() const {
     }
     positions_built_ = true;
 }
+
+} // namespace legacy

@@ -3,7 +3,8 @@
 #include <cassert>
 #include <set>
 #include <algorithm>
-#include "mesh/icosahedral_geodesic.hpp"
+#include "legacy/mesh/icosahedral_geodesic.hpp"
+using namespace legacy;
 
 #define TEST(name) printf("  TEST: %s ... ", #name);
 #define PASS() printf("PASSED\n");

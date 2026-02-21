@@ -1,17 +1,9 @@
 #pragma once
-#include "mesh/field.hpp"
-#include "mesh/icosahedral_geodesic.hpp"
-#include "FastNoiseLite.h"
 
-struct NoiseParams {
-    int seed = 42;
-    int octaves = 6;
-    float frequency = 1.5f;
-    float lacunarity = 2.0f;
-    float gain = 0.5f;
-    float warp_amplitude = 0.0f;
-    float ocean_fraction = 0.55f;
-};
+#include "noise/noise_params.hpp"
+#include "mesh/mesh_concept.hpp"
+#include "mesh/ico_mesh.hpp"
 
-template<typename Mesh>
-Field<Mesh> generate_noise(const Mesh& mesh, const NoiseParams& params);
+template<Mesh M>
+M generate_noise(const typename M::topology_type* topo, const NoiseParams& params)
+    requires std::same_as<typename M::value_type, float>;

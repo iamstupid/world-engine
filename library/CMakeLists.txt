@@ -1,7 +1,10 @@
 # WorldEngine core library
 add_library(worldengine SHARED
-    mesh/icosahedral_geodesic.cpp
+    legacy/mesh/icosahedral_geodesic.cpp
+    mesh/ico_topology.cpp
+    legacy/noise/noise_generator.cpp
     noise/noise_generator.cpp
+    legacy/io/serialize.cpp
     io/serialize.cpp
 )
 
@@ -28,7 +31,25 @@ target_link_libraries(test_noise PRIVATE worldengine)
 add_executable(test_serialize tests/test_serialize.cpp)
 target_link_libraries(test_serialize PRIVATE worldengine)
 
+add_executable(test_ico_topology tests/test_ico_topology.cpp)
+target_link_libraries(test_ico_topology PRIVATE worldengine)
+
+add_executable(test_ico_iterator tests/test_ico_iterator.cpp)
+target_link_libraries(test_ico_iterator PRIVATE worldengine)
+
+add_executable(test_ico_mesh_v2 tests/test_ico_mesh_v2.cpp)
+target_link_libraries(test_ico_mesh_v2 PRIVATE worldengine)
+
+add_executable(test_serialize_v2 tests/test_serialize_v2.cpp)
+target_link_libraries(test_serialize_v2 PRIVATE worldengine)
+
+add_executable(test_v1_v2_equivalence tests/test_v1_v2_equivalence.cpp)
+target_link_libraries(test_v1_v2_equivalence PRIVATE worldengine)
+
 # Visual tests
+add_executable(bench_neighbors tests/bench_neighbors.cpp)
+target_link_libraries(bench_neighbors PRIVATE worldengine)
+
 add_executable(vis_ico_mesh tests/visual/vis_ico_mesh.cpp)
 target_link_libraries(vis_ico_mesh PRIVATE worldengine)
 

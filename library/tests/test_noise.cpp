@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cmath>
 #include <cassert>
-#include "mesh/icosahedral_geodesic.hpp"
-#include "noise/noise_generator.hpp"
+#include "legacy/mesh/icosahedral_geodesic.hpp"
+#include "legacy/noise/noise_generator.hpp"
+using namespace legacy;
 
 #define TEST(name) printf("  TEST: %s ... ", #name);
 #define PASS() printf("PASSED\n");
