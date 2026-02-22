@@ -1,6 +1,7 @@
 /**
  * WorldEngine API client.
- * Provides fetch wrappers for the server REST API and FILD binary parsing.
+ * Provides fetch wrappers for the server REST API.
+ * FILD parsing is handled by the WASM Worker (see mesh_bridge.js).
  */
 
 const API_BASE = '/api/v1';
@@ -68,82 +69,4 @@ export async function getFieldStats(worldId, fieldName) {
         throw new Error(`getFieldStats failed: ${resp.status} ${resp.statusText}`);
     }
     return resp.json();
-}
-
-/**
- * FILD header layout (48 bytes total):
- *   0: uint32 magic      (0x46494C44 = "FILD")
- *   4: uint32 version
- *   8: uint32 N
- *  12: uint32 num_cells
- *  16: uint32 dtype       (0 = float32)
- *  20: uint32 compression (0 = none, 1 = gzip)
- *  24: uint32 payload_size
- *  28: char[16] name
- *  44: uint32 reserved
- */
-const FILD_MAGIC = 0x46494C44;
-const FILD_HEADER_SIZE = 48;
-
-/**
- * Parse a FILD binary buffer into a Float32Array.
- * Handles optional gzip decompression via pako (loaded globally).
- * @param {ArrayBuffer} buffer - raw FILD data
- * @returns {{ name: string, N: number, numCells: number, data: Float32Array }}
- */
-export function parseFILD(buffer) {
-    if (buffer.byteLength < FILD_HEADER_SIZE) {
-        throw new Error(`FILD buffer too small: ${buffer.byteLength} bytes (need at least ${FILD_HEADER_SIZE})`);
-    }
-
-    const headerView = new DataView(buffer);
-
-    // Read header fields (little-endian)
-    const magic = headerView.getUint32(0, true);
-    if (magic !== FILD_MAGIC) {
-        throw new Error(`Invalid FILD magic: 0x${magic.toString(16)} (expected 0x${FILD_MAGIC.toString(16)})`);
-    }
-
-    const version = headerView.getUint32(4, true);
-    const N = headerView.getUint32(8, true);
-    const numCells = headerView.getUint32(12, true);
-    const dtype = headerView.getUint32(16, true);
-    const compression = headerView.getUint32(20, true);
-    const payloadSize = headerView.getUint32(24, true);
-
-    // Read name (16-byte null-terminated string)
-    const nameBytes = new Uint8Array(buffer, 28, 16);
-    let nameEnd = nameBytes.indexOf(0);
-    if (nameEnd === -1) nameEnd = 16;
-    const name = new TextDecoder('ascii').decode(nameBytes.slice(0, nameEnd));
-
-    // reserved at offset 44, skip
-
-    // Extract payload
-    const payloadBytes = new Uint8Array(buffer, FILD_HEADER_SIZE, payloadSize);
-
-    let decompressed;
-    if (compression === 1) {
-        // Gzip compressed - decompress with pako
-        if (typeof pako === 'undefined') {
-            throw new Error('pako library not loaded; cannot decompress gzip FILD payload');
-        }
-        decompressed = pako.inflate(payloadBytes);
-    } else if (compression === 0) {
-        decompressed = payloadBytes;
-    } else {
-        throw new Error(`Unknown FILD compression type: ${compression}`);
-    }
-
-    // Convert to Float32Array
-    // Ensure proper alignment by copying into a new ArrayBuffer
-    const alignedBuffer = new ArrayBuffer(decompressed.byteLength);
-    new Uint8Array(alignedBuffer).set(decompressed);
-    const data = new Float32Array(alignedBuffer);
-
-    if (data.length !== numCells) {
-        console.warn(`FILD cell count mismatch: header says ${numCells}, got ${data.length} floats`);
-    }
-
-    return { name, N, numCells, data };
 }

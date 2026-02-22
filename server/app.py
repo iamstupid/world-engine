@@ -1,5 +1,9 @@
 import sys
 import os
+import mimetypes
+
+# Ensure .wasm files are served with correct MIME type
+mimetypes.add_type('application/wasm', '.wasm')
 
 # Add build directory to Python path so worldengine_py can be found
 BUILD_LIB = os.path.join(os.path.dirname(__file__), "..", "build", "library")

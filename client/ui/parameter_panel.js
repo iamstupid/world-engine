@@ -20,7 +20,8 @@ export class ParameterPanel {
      */
     _build() {
         const defs = [
-            { id: 'N',              label: 'Subdivisions (N)', type: 'range', min: 16,  max: 512, step: 1,    value: 100  },
+            { id: 'k',              label: 'Detail Level',     type: 'range', min: 1,   max: 13,  step: 1,    value: 6,
+              format: (v) => `k=${v} (N=${1 << parseInt(v)})` },
             { id: 'seed',           label: 'Seed',             type: 'number', min: 0,  max: 999999, step: 1, value: 42   },
             { id: 'octaves',        label: 'Octaves',          type: 'range', min: 1,   max: 10,  step: 1,    value: 6    },
             { id: 'frequency',      label: 'Frequency',        type: 'range', min: 0.5, max: 5.0, step: 0.1,  value: 1.5  },
@@ -42,7 +43,8 @@ export class ParameterPanel {
             const valueSpan = document.createElement('span');
             valueSpan.className = 'param-value';
             valueSpan.id = `param-${def.id}-value`;
-            valueSpan.textContent = def.value;
+            const fmt = def.format || ((v) => v);
+            valueSpan.textContent = fmt(def.value);
             label.appendChild(valueSpan);
 
             group.appendChild(label);
@@ -58,7 +60,7 @@ export class ParameterPanel {
                 input.value = def.value;
 
                 input.addEventListener('input', () => {
-                    valueSpan.textContent = input.value;
+                    valueSpan.textContent = fmt(input.value);
                 });
             } else if (def.type === 'number') {
                 input = document.createElement('input');
@@ -96,8 +98,10 @@ export class ParameterPanel {
      * @returns {Object} parameter object ready for the API
      */
     getParams() {
+        const k = parseInt(this._controls.k.value, 10);
         return {
-            N:              parseInt(this._controls.N.value, 10),
+            k:              k,
+            N:              1 << k,
             seed:           parseInt(this._controls.seed.value, 10),
             octaves:        parseInt(this._controls.octaves.value, 10),
             frequency:      parseFloat(this._controls.frequency.value),

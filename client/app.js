@@ -9,8 +9,8 @@ import { MapView } from './renderer/views/map_view.js';
 import { TERRAIN_COLORMAP } from './renderer/colormap.js';
 import { ParameterPanel } from './ui/parameter_panel.js';
 import { ViewSwitcher } from './ui/view_switcher.js';
-import { generateNoise, getFieldData, parseFILD } from './api/client.js';
-import { IcoGeodesicMesh } from './renderer/geometry/icosahedral_geodesic.js';
+import { generateNoise, getFieldData } from './api/client.js';
+import { buildMesh, parseFILDWasm } from './api/mesh_bridge.js';
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -87,21 +87,16 @@ window.addEventListener('load', () => {
 // ---------------------------------------------------------------------------
 async function generateWorld(params) {
     paramPanel.setEnabled(false);
-    setStatus('Fetching mesh...');
 
     try {
-        // Step 1: Build the icosahedral mesh client-side
-        const icoMesh = new IcoGeodesicMesh(params.N);
-        currentMeshData = {
-            positions: icoMesh.getPositions(),  // Float32Array (numCells * 3)
-            faces: icoMesh.getFaces(),          // Uint32Array (numFaces * 3)
-            num_cells: icoMesh.totalCells,
-        };
+        // Step 1: Build mesh geometry via WASM Worker
+        setStatus('Building mesh (WASM)...');
+        currentMeshData = await buildMesh(params.k);
         globeView.setMesh(currentMeshData);
 
         setStatus('Generating terrain...');
 
-        // Step 2: Generate noise-based terrain
+        // Step 2: Generate noise-based terrain on server
         const genResult = await generateNoise({
             mesh_type: 'ico',
             N: params.N,
@@ -118,9 +113,9 @@ async function generateWorld(params) {
 
         setStatus('Downloading elevation data...');
 
-        // Step 3: Fetch the elevation field in FILD format
+        // Step 3: Fetch FILD field data and parse via WASM Worker
         const fieldBuffer = await getFieldData(currentWorldId, 'elevation');
-        const fild = parseFILD(fieldBuffer);
+        const fild = await parseFILDWasm(fieldBuffer, params.k);
         currentFieldData = fild.data;
 
         setStatus('Rendering...');

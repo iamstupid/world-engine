@@ -10,8 +10,8 @@ router = APIRouter()
 async def generate_noise_endpoint(req: GenerateRequest):
     if req.mesh_type != "ico":
         raise HTTPException(400, f"Unsupported mesh type: {req.mesh_type}")
-    if req.N < 1 or req.N > 2000:
-        raise HTTPException(400, f"N must be between 1 and 2000, got {req.N}")
+    if req.N < 1:
+        raise HTTPException(400, f"N must be >= 1, got {req.N}")
 
     params = {
         "seed": req.noise.seed,

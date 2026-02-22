@@ -6,8 +6,8 @@ router = APIRouter()
 
 @router.get("/mesh/ico/{N}", response_model=MeshInfoResponse)
 async def get_mesh_info(N: int):
-    if N < 1 or N > 2000:
-        raise HTTPException(400, f"N must be between 1 and 2000, got {N}")
+    if N < 1:
+        raise HTTPException(400, f"N must be >= 1, got {N}")
 
     num_cells = 10 * N * N + 2
     num_rows = 3 * N + 1

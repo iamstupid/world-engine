@@ -71,6 +71,15 @@ export class GlobeView {
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.setIndex(new THREE.BufferAttribute(faces, 1));
+
+        // WebGL limits indices per draw call (~30M). Split into groups if needed.
+        const MAX_INDICES = 29999997; // largest multiple of 3 under 30M
+        if (faces.length > MAX_INDICES) {
+            for (let off = 0; off < faces.length; off += MAX_INDICES) {
+                geometry.addGroup(off, Math.min(MAX_INDICES, faces.length - off), 0);
+            }
+        }
+
         geometry.computeVertexNormals();
 
         const material = new THREE.MeshStandardMaterial({
@@ -81,7 +90,9 @@ export class GlobeView {
             flatShading: false,
         });
 
-        this.engine.setMesh(geometry, material);
+        // Pass material as array when using draw groups so Three.js dispatches per-group
+        const mat = geometry.groups.length > 0 ? [material] : material;
+        this.engine.setMesh(geometry, mat);
 
         if (!this.visible) {
             this.hide();

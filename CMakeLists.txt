@@ -7,11 +7,11 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
-# Find zlib
-find_package(ZLIB REQUIRED)
-
-# Find pybind11 from venv
-find_package(pybind11 REQUIRED)
+# Native-only dependencies (not needed for Emscripten WASM build)
+if(NOT EMSCRIPTEN)
+    find_package(ZLIB REQUIRED)
+    find_package(pybind11 REQUIRED)
+endif()
 
 # Third-party include dirs
 set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
