@@ -95,6 +95,11 @@ public:
     int k() const { return topo_->k(); }
     Vec3f cell_position(int idx) const { return topo_->cell_position(idx); }
 
+    // --- Inverse point-location ---
+
+    IcoTopology::LocateResult locate(Vec3f p) const { return topo_->locate(p); }
+    IcoTopology::LocateResult locate(Vec3f p, int face_hint) const { return topo_->locate(p, face_hint); }
+
     // --- Iteration ---
 
     iterator begin() { return iterator(IcoIterator::begin(topo_), data_.data()); }

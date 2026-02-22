@@ -1,0 +1,8 @@
+-std=c++20
+-Wall
+-Wextra
+-Wno-unused-parameter
+-Ilibrary
+-Ithird_party/FastNoiseLite/Cpp
+-Ithird_party/stb
+-Ithird_party/nlohmann

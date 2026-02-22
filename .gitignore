@@ -1,9 +1,27 @@
+# Build outputs
 build/
+build-wasm/
+compile_commands.json
+
+# Python
 venv/
+.venv/
 __pycache__/
 *.pyc
+*.egg-info/
+
+# Native artifacts
 *.o
 *.so
 *.pyd
-*.egg-info/
+
+# WASM build outputs (generated from build-wasm)
+client/wasm/
+
+# IDE / editor
 .vscode/
+.cache/
+.clangd/
+
+# Claude Code
+.claude/

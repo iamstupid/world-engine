@@ -96,6 +96,9 @@ else()
     add_executable(test_v1_v2_equivalence tests/test_v1_v2_equivalence.cpp)
     target_link_libraries(test_v1_v2_equivalence PRIVATE worldengine)
 
+    add_executable(test_locate tests/test_locate.cpp)
+    target_link_libraries(test_locate PRIVATE worldengine)
+
     # Visual tests
     add_executable(bench_neighbors tests/bench_neighbors.cpp)
     target_link_libraries(bench_neighbors PRIVATE worldengine)

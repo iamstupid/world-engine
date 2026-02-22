@@ -41,6 +41,19 @@ public:
 
     struct NeighborRC { int idx; int16_t row, col; int8_t sector; };
 
+    // --- Inverse point-location ---
+
+    struct LocateResult {
+        int face;               // icosahedron base face [0..19]
+        float u, v, w;          // natural (pre-warp) barycentrics within base face
+        float s_u, s_v, s_w;    // sub-triangle interpolation weights
+        NeighborRC vert[3];     // vert[0]↔s_u, vert[1]↔s_v, vert[2]↔s_w
+    };
+
+    /// Locate which sub-triangle of the IGM contains unit-sphere point p.
+    LocateResult locate(Vec3f p) const;
+    LocateResult locate(Vec3f p, int face_hint) const;
+
     /// Number of neighbors (5 for pentagons, 6 for hexagons). O(1).
     int neighbor_count(int row, int col, int sector, int col_rem) const;
 
@@ -89,6 +102,7 @@ private:
     void build_positions() const;
     void build_faces() const;
     int  face_local_to_cell(int fid, int i, int j) const;
+    NeighborRC face_local_to_rc(int fid, int i, int j) const;
 
     // Emit helper: wrap sector+col in one shot
     inline NeighborRC emit(int r, int c, int s, int ds) const {

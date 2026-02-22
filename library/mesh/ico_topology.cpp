@@ -418,7 +418,7 @@ int IcoTopology::face_local_to_cell(int fid, int i, int j) const {
         row_w = (row == 3 * N) ? 1 : 5 * (3 * N - row);
     }
 
-    int col = ((col_raw % row_w) + row_w) % row_w;
+    int col = (col_raw >= row_w) ? col_raw - row_w : col_raw;
     return row_start_[row] + col;
 }
 
@@ -448,6 +448,347 @@ void IcoTopology::build_faces() const {
     }
 
     assert(idx == total_tris * 3);
+}
+
+// ============================================================
+// face_local_to_rc — like face_local_to_cell but returns NeighborRC
+// ============================================================
+
+IcoTopology::NeighborRC IcoTopology::face_local_to_rc(int fid, int i, int j) const {
+    int N = N_;
+    int row, col_raw, row_w;
+
+    if (fid < 5) {
+        row = N - i;
+        col_raw = fid * (N - i) + (N - i - j);
+        row_w = (row == 0) ? 1 : 5 * row;
+    } else if (fid < 15) {
+        int s = (fid - 5) / 2;
+        if ((fid - 5) % 2 == 0) {
+            row = N + j;
+            col_raw = s * N + (N - i - j);
+        } else {
+            row = N + i + j;
+            col_raw = s * N + (N - i);
+        }
+        row_w = 5 * N;
+    } else {
+        int f = fid - 15;
+        row = 2 * N + i;
+        col_raw = f * (N - i) + j;
+        row_w = (row == 3 * N) ? 1 : 5 * (3 * N - row);
+    }
+
+    int col = (col_raw >= row_w) ? col_raw - row_w : col_raw;
+    int idx = row_start_[row] + col;
+    int stride = stride_of(row);
+    int sector = (stride > 0) ? col / stride : 0;
+    return { idx, (int16_t)row, (int16_t)col, (int8_t)sector };
+}
+
+// ============================================================
+// Inverse point-location: locate()
+// ============================================================
+
+namespace {
+
+// --- Double-precision warp helpers ---
+
+constexpr double ALPHA_D = 0.5372;
+constexpr double BETA_D  = -0.4637;
+
+inline double warp_1d(double x) {
+    return x + ALPHA_D * x * (1.0 - x) * (0.5 - x);
+}
+
+inline double warp_1d_deriv(double x) {
+    return 1.0 + ALPHA_D * (0.5 - 3.0 * x + 3.0 * x * x);
+}
+
+struct WarpJacobian {
+    double uw, vw;      // warped barycentrics (renormalized)
+    double J00, J01, J10, J11;
+};
+
+WarpJacobian eval_forward_warp(double u, double v) {
+    double w = 1.0 - u - v;
+
+    double fu = warp_1d(u);
+    double fv = warp_1d(v);
+    double fw = warp_1d(w);
+    double c  = BETA_D * u * v * w;
+
+    double uw_raw = fu + c;
+    double vw_raw = fv + c;
+    double ww_raw = fw + c;
+    double S = uw_raw + vw_raw + ww_raw;
+    double inv_S = 1.0 / S;
+
+    double uw = uw_raw * inv_S;
+    double vw = vw_raw * inv_S;
+
+    // Partial derivatives of the coupling term
+    double dc_du = BETA_D * v * (1.0 - 2.0 * u - v);
+    double dc_dv = BETA_D * u * (1.0 - u - 2.0 * v);
+
+    // Partials of raw values
+    double duw_du = warp_1d_deriv(u) + dc_du;
+    double duw_dv = dc_dv;
+    double dvw_du = dc_du;
+    double dvw_dv = warp_1d_deriv(v) + dc_dv;
+    double dww_du = -warp_1d_deriv(w) + dc_du;
+    double dww_dv = -warp_1d_deriv(w) + dc_dv;
+
+    double dS_du = duw_du + dvw_du + dww_du;
+    double dS_dv = duw_dv + dvw_dv + dww_dv;
+
+    // Quotient rule for renormalized values
+    double inv_S2 = inv_S * inv_S;
+
+    WarpJacobian r;
+    r.uw = uw;
+    r.vw = vw;
+    r.J00 = (duw_du * S - uw_raw * dS_du) * inv_S2;
+    r.J01 = (duw_dv * S - uw_raw * dS_dv) * inv_S2;
+    r.J10 = (dvw_du * S - vw_raw * dS_du) * inv_S2;
+    r.J11 = (dvw_dv * S - vw_raw * dS_dv) * inv_S2;
+    return r;
+}
+
+void inverse_warp(double uw_target, double vw_target, float* out_u, float* out_v) {
+    double u = uw_target;
+    double v = vw_target;
+
+    for (int iter = 0; iter < 2; iter++) {
+        WarpJacobian wr = eval_forward_warp(u, v);
+        double ru = wr.uw - uw_target;
+        double rv = wr.vw - vw_target;
+
+        double det = wr.J00 * wr.J11 - wr.J01 * wr.J10;
+        if (std::abs(det) < 1e-15) break;
+        double inv_det = 1.0 / det;
+
+        double du = -(wr.J11 * ru - wr.J01 * rv) * inv_det;
+        double dv = -(-wr.J10 * ru + wr.J00 * rv) * inv_det;
+
+        u += du;
+        v += dv;
+    }
+
+    // Clamp to valid barycentric triangle
+    if (u < 0.0) u = 0.0;
+    if (v < 0.0) v = 0.0;
+    if (u + v > 1.0) {
+        double s = u + v;
+        u /= s;
+        v /= s;
+    }
+
+    *out_u = static_cast<float>(u);
+    *out_v = static_cast<float>(v);
+}
+
+// --- Test if point is inside a specific spherical face ---
+
+bool point_in_face(const Vec3f* ico_v, Vec3f p, int fid) {
+    const Vec3f& A = ico_v[IcoTopology::FACE_VERTS[fid][0]];
+    const Vec3f& B = ico_v[IcoTopology::FACE_VERTS[fid][1]];
+    const Vec3f& C = ico_v[IcoTopology::FACE_VERTS[fid][2]];
+    float d_ab = p.dot(A.cross(B));
+    float d_bc = p.dot(B.cross(C));
+    float d_ca = p.dot(C.cross(A));
+    return (d_ab >= -1e-6f && d_bc >= -1e-6f && d_ca >= -1e-6f);
+}
+
+// --- Face-finding: brute-force spherical half-plane test ---
+
+int find_face_brute(const Vec3f* ico_v, Vec3f p) {
+    float best = -2.0f;
+    int best_fid = 0;
+    for (int fid = 0; fid < 20; fid++) {
+        const Vec3f& A = ico_v[IcoTopology::FACE_VERTS[fid][0]];
+        const Vec3f& B = ico_v[IcoTopology::FACE_VERTS[fid][1]];
+        const Vec3f& C = ico_v[IcoTopology::FACE_VERTS[fid][2]];
+
+        float d_ab = p.dot(A.cross(B));
+        float d_bc = p.dot(B.cross(C));
+        float d_ca = p.dot(C.cross(A));
+
+        if (d_ab >= -1e-6f && d_bc >= -1e-6f && d_ca >= -1e-6f)
+            return fid;
+
+        float m = std::min({d_ab, d_bc, d_ca});
+        if (m > best) { best = m; best_fid = fid; }
+    }
+    return best_fid;
+}
+
+// --- Face-finding: accelerated latitude-band + sector ---
+//
+// The icosahedron has two "tropics" at z = ±1/√5 separating caps from
+// the equatorial band.  Cap sector boundaries are meridians (constant
+// longitude), but equatorial sector boundaries are great-circle arcs
+// from an upper-ring vertex (lon = s·72°, z = +T) to the adjacent
+// lower-ring vertex (lon = s·72° + 36°, z = −T).  So the effective
+// boundary longitude shifts by 36° across the band — a latitude-
+// adjusted longitude is needed for correct sector classification.
+
+constexpr float TROPIC_Z = 0.4472136f;                 // 1/√5
+constexpr float TWO_PI   = 2.0f * float(M_PI);
+constexpr float S72      = TWO_PI / 5.0f;              // 72°
+constexpr float S36      = float(M_PI) / 5.0f;         // 36°
+constexpr float INV_2T   = 1.0f / (2.0f * TROPIC_Z);  // 1/(2T)
+
+int find_face_fast(const Vec3f* ico_v, Vec3f p) {
+    int cands[6];
+    int nc = 0;
+
+    float lon = std::atan2(p.y, p.x);
+    if (lon < 0.0f) lon += TWO_PI;
+
+    // Latitude-adjusted longitude for the equatorial band.
+    // t ∈ [0,1]: 0 at upper tropic, 1 at lower tropic.
+    // At t, the sector-s boundary sits at lon = s·72° + t·36°,
+    // so we subtract t·36° from lon before dividing by 72°.
+    float t = std::max(0.0f, std::min(1.0f,
+                  (TROPIC_Z - p.z) * INV_2T));
+    float eq_lon = lon - t * S36;
+    if (eq_lon < 0.0f) eq_lon += TWO_PI;
+    int eq_s = (int)(eq_lon / S72) % 5;
+
+    if (p.z > TROPIC_Z) {
+        // North cap: boundaries are meridians at s·72°
+        int s = (int)(lon / S72) % 5;
+        cands[nc++] = s;
+        cands[nc++] = (s + 4) % 5;
+        // Near tropic: also try equatorial (uses adjusted sector)
+        cands[nc++] = 5 + eq_s * 2;
+        cands[nc++] = 5 + eq_s * 2 + 1;
+    } else if (p.z < -TROPIC_Z) {
+        // South cap: boundaries at s·72° + 36°
+        float slon = lon - S36;
+        if (slon < 0.0f) slon += TWO_PI;
+        int s = (int)(slon / S72) % 5;
+        cands[nc++] = 15 + s;
+        cands[nc++] = 15 + (s + 4) % 5;
+        // Near tropic: equatorial
+        cands[nc++] = 5 + eq_s * 2;
+        cands[nc++] = 5 + eq_s * 2 + 1;
+    } else {
+        // Equatorial band: use latitude-adjusted sector
+        cands[nc++] = 5 + eq_s * 2;
+        cands[nc++] = 5 + eq_s * 2 + 1;
+        int adj = (eq_s + 4) % 5;
+        cands[nc++] = 5 + adj * 2;
+        cands[nc++] = 5 + adj * 2 + 1;
+        // Near-tropic crossover into cap
+        if (p.z > 0.0f) {
+            cands[nc++] = (int)(lon / S72) % 5;
+        } else {
+            float slon = lon - S36;
+            if (slon < 0.0f) slon += TWO_PI;
+            cands[nc++] = 15 + (int)(slon / S72) % 5;
+        }
+    }
+
+    for (int ci = 0; ci < nc; ci++) {
+        if (point_in_face(ico_v, p, cands[ci]))
+            return cands[ci];
+    }
+    return find_face_brute(ico_v, p);
+}
+
+} // anonymous namespace
+
+IcoTopology::LocateResult IcoTopology::locate(Vec3f p) const {
+    return locate(p, -1);
+}
+
+IcoTopology::LocateResult IcoTopology::locate(Vec3f p, int face_hint) const {
+    p = p.normalized();
+    const int N = N_;
+
+    // --- Stage 1: Face finding ---
+    int face = -1;
+
+    // Try face_hint first
+    if (face_hint >= 0 && face_hint < 20) {
+        if (point_in_face(ico_verts, p, face_hint))
+            face = face_hint;
+    }
+
+    // Accelerated search
+    if (face < 0)
+        face = find_face_fast(ico_verts, p);
+
+    // --- Stage 2: Warped barycentrics via scalar triple products ---
+    const Vec3f& A = ico_verts[FACE_VERTS[face][0]];
+    const Vec3f& B = ico_verts[FACE_VERTS[face][1]];
+    const Vec3f& C = ico_verts[FACE_VERTS[face][2]];
+
+    float pBC = p.dot(B.cross(C));
+    float ApC = A.dot(p.cross(C));
+    float ABp = A.dot(B.cross(p));
+    float sum = pBC + ApC + ABp;
+
+    float uw, vw;
+    if (std::abs(sum) < 1e-12f) {
+        uw = vw = 1.0f / 3.0f;
+    } else {
+        float inv_sum = 1.0f / sum;
+        uw = pBC * inv_sum;
+        vw = ApC * inv_sum;
+    }
+
+    // Clamp for floating-point edge cases
+    uw = std::max(0.0f, std::min(1.0f, uw));
+    vw = std::max(0.0f, std::min(1.0f - uw, vw));
+
+    // --- Stage 3: Inverse warp (Newton, double precision) ---
+    float u, v;
+    inverse_warp((double)uw, (double)vw, &u, &v);
+    float w = 1.0f - u - v;
+
+    // --- Sub-triangle identification ---
+    float fi = u * N;
+    float fj = v * N;
+    int i = (int)fi;
+    int j = (int)fj;
+
+    // Clamp to valid grid range
+    if (i < 0) i = 0;
+    if (j < 0) j = 0;
+    if (i >= N) i = N - 1;
+    if (j >= N - i) j = N - i - 1;
+
+    float fu = fi - i;
+    float fv = fj - j;
+
+    LocateResult result;
+    result.face = face;
+    result.u = u;
+    result.v = v;
+    result.w = w;
+
+    if (fu + fv <= 1.0f) {
+        // Lower sub-triangle: (i,j), (i+1,j), (i,j+1)
+        result.s_u = 1.0f - fu - fv;
+        result.s_v = fu;
+        result.s_w = fv;
+        result.vert[0] = face_local_to_rc(face, i, j);
+        result.vert[1] = face_local_to_rc(face, i + 1, j);
+        result.vert[2] = face_local_to_rc(face, i, j + 1);
+    } else {
+        // Upper sub-triangle: (i+1,j+1), (i+1,j), (i,j+1)
+        result.s_u = fu + fv - 1.0f;
+        result.s_v = 1.0f - fv;
+        result.s_w = 1.0f - fu;
+        result.vert[0] = face_local_to_rc(face, i + 1, j + 1);
+        result.vert[1] = face_local_to_rc(face, i + 1, j);
+        result.vert[2] = face_local_to_rc(face, i, j + 1);
+    }
+
+    return result;
 }
 
 // ============================================================
