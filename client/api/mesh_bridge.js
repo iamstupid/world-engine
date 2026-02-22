@@ -65,12 +65,12 @@ export async function buildMesh(k) {
  * Parse a FILD binary buffer via WASM (C++ zlib, replaces pako).
  * @param {ArrayBuffer} buffer - raw FILD response
  * @param {number} k - subdivision exponent
- * @returns {Promise<{data: Float32Array}>}
+ * @returns {Promise<{data: Float32Array|Uint16Array, dtype: string}>}
  */
 export async function parseFILDWasm(buffer, k) {
     await ensureWorker();
     const result = await sendRequest({ type: 'parseFILD', buffer, k });
-    return { data: result.data };
+    return { data: result.data, dtype: result.dtype || 'float32' };
 }
 
 /**

@@ -8,6 +8,7 @@
 #include "mesh/ico_topology.hpp"
 #include "mesh/ico_mesh.hpp"
 #include "noise/noise_generator.hpp"
+#include "tectonics/plate_assign.hpp"
 #include "io/serialize.hpp"
 
 namespace py = pybind11;
@@ -144,6 +145,43 @@ PYBIND11_MODULE(worldengine_py, m) {
     }, py::arg("k"), py::arg("params"));
 
     m.def("serialize_v2", [](const IcoMesh<float>& mesh, int compression) {
+        auto bytes = serialize_field(mesh, compression);
+        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }, py::arg("mesh"), py::arg("compression") = 1);
+
+    // --- Plate tectonics ---
+
+    py::class_<IcoMesh<uint16_t>>(m, "IcoMeshU16")
+        .def("num_cells", &IcoMesh<uint16_t>::num_cells)
+        .def("N", &IcoMesh<uint16_t>::N)
+        .def("k", &IcoMesh<uint16_t>::k)
+        .def("name", &IcoMesh<uint16_t>::name)
+        .def("to_numpy", [](IcoMesh<uint16_t>& m) {
+            return py::array_t<uint16_t>(
+                {m.num_cells()}, {(int)sizeof(uint16_t)}, m.data(), py::cast(m)
+            );
+        });
+
+    m.def("assign_plates", [](int k, py::array_t<float> elevation, py::dict params_dict) {
+        const IcoTopology& topo = ico_topology(k);
+        PlateAssignParams params;
+        if (params_dict.contains("num_plates")) params.num_plates = params_dict["num_plates"].cast<int>();
+        if (params_dict.contains("seed")) params.seed = params_dict["seed"].cast<int>();
+        if (params_dict.contains("ocean_bias")) params.ocean_bias = params_dict["ocean_bias"].cast<float>();
+        if (params_dict.contains("weight_octaves")) params.weight_octaves = params_dict["weight_octaves"].cast<int>();
+        if (params_dict.contains("weight_frequency")) params.weight_frequency = params_dict["weight_frequency"].cast<float>();
+        if (params_dict.contains("weight_lacunarity")) params.weight_lacunarity = params_dict["weight_lacunarity"].cast<float>();
+        if (params_dict.contains("weight_gain")) params.weight_gain = params_dict["weight_gain"].cast<float>();
+
+        const float* elev_ptr = elevation.size() > 0 ? elevation.data() : nullptr;
+
+        py::gil_scoped_release release;
+        auto result = assign_plates(&topo, params, elev_ptr);
+        py::gil_scoped_acquire acquire;
+        return result;
+    }, py::arg("k"), py::arg("elevation"), py::arg("params"));
+
+    m.def("serialize_v2_u16", [](const IcoMesh<uint16_t>& mesh, int compression) {
         auto bytes = serialize_field(mesh, compression);
         return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }, py::arg("mesh"), py::arg("compression") = 1);

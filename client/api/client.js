@@ -70,3 +70,48 @@ export async function getFieldStats(worldId, fieldName) {
     }
     return resp.json();
 }
+
+/**
+ * Request plate assignment.
+ * @param {Object} params - { world_id, plates: { num_plates, seed, ... } }
+ * @returns {Promise<Object>} result with fields list
+ */
+export async function generatePlates(params) {
+    const resp = await fetch(`${API_BASE}/generate/plates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+    });
+    if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`generatePlates failed: ${resp.status} ${resp.statusText} - ${text}`);
+    }
+    return resp.json();
+}
+
+/**
+ * Fetch raw buffer data in FILD binary format.
+ * @param {string} worldId - world identifier
+ * @param {string} name - buffer name (e.g. "elevation", "plate_id")
+ * @returns {Promise<ArrayBuffer>} raw FILD binary data
+ */
+export async function getBufferData(worldId, name) {
+    const resp = await fetch(`${API_BASE}/world/${worldId}/buffer/${name}`);
+    if (!resp.ok) {
+        throw new Error(`getBufferData failed: ${resp.status} ${resp.statusText}`);
+    }
+    return resp.arrayBuffer();
+}
+
+/**
+ * List available buffers for a world.
+ * @param {string} worldId - world identifier
+ * @returns {Promise<Object>} { world_id, buffers: [{name, dtype, display_name, colormap}] }
+ */
+export async function getBufferList(worldId) {
+    const resp = await fetch(`${API_BASE}/world/${worldId}/buffers`);
+    if (!resp.ok) {
+        throw new Error(`getBufferList failed: ${resp.status} ${resp.statusText}`);
+    }
+    return resp.json();
+}

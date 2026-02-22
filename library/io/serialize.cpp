@@ -78,3 +78,5 @@ template std::vector<uint8_t> serialize_field<float>(const IcoMesh<float>&, int)
 template IcoMesh<float> deserialize_field<float>(const uint8_t*, size_t, const IcoTopology*);
 template std::vector<uint8_t> serialize_field<uint8_t>(const IcoMesh<uint8_t>&, int);
 template IcoMesh<uint8_t> deserialize_field<uint8_t>(const uint8_t*, size_t, const IcoTopology*);
+template std::vector<uint8_t> serialize_field<uint16_t>(const IcoMesh<uint16_t>&, int);
+template IcoMesh<uint16_t> deserialize_field<uint16_t>(const uint8_t*, size_t, const IcoTopology*);

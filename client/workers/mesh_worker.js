@@ -8,7 +8,7 @@
  *
  * Messages OUT:
  *   { type: 'meshReady', positions, faces, numCells, N, requestId }
- *   { type: 'fildReady', data, requestId }
+ *   { type: 'fildReady', data, dtype, requestId }
  *   { type: 'noiseReady', data, numCells, requestId }
  *   { type: 'error', message, requestId }
  *
@@ -25,6 +25,10 @@ WorldEngineModule({
     Module = mod;
     postMessage({ type: 'ready' });
 });
+
+// FILD dtype codes (from dtype_traits.hpp)
+const DTYPE_FLOAT32 = 0;
+const DTYPE_UINT16  = 7;
 
 onmessage = function(e) {
     const { type, requestId } = e.data;
@@ -58,14 +62,27 @@ onmessage = function(e) {
             const ptr = Module._malloc(bytes.length);
             Module.HEAPU8.set(bytes, ptr);
 
-            // Parse via C++ (returns typed_memory_view into static result)
-            const resultView = Module.parseFILD(ptr, bytes.length, k);
-            const data = new Float32Array(resultView);
+            // Read dtype from FILD header
+            const dtypeCode = Module.getFILDDtype(ptr, bytes.length);
+
+            let data;
+            let dtypeName;
+
+            if (dtypeCode === DTYPE_UINT16) {
+                const resultView = Module.parseFILDUint16(ptr, bytes.length, k);
+                data = new Uint16Array(resultView);
+                dtypeName = 'uint16';
+            } else {
+                // Default: float32
+                const resultView = Module.parseFILD(ptr, bytes.length, k);
+                data = new Float32Array(resultView);
+                dtypeName = 'float32';
+            }
 
             Module._free(ptr);
 
             postMessage(
-                { type: 'fildReady', data, requestId },
+                { type: 'fildReady', data, dtype: dtypeName, requestId },
                 [data.buffer]
             );
 

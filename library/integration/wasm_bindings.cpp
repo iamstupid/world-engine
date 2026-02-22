@@ -4,6 +4,8 @@
 #include "mesh/ico_mesh.hpp"
 #include "io/serialize.hpp"
 #include "noise/noise_generator.hpp"
+#include "tectonics/plate_assign.hpp"
+#include "io/fild_header.hpp"
 #include <cstring>
 
 using namespace emscripten;
@@ -51,6 +53,30 @@ val parseFILD(uintptr_t buf_ptr, int buf_len, int k) {
 }
 
 // ---------------------------------------------------------------------------
+// FILD uint16 parsing — separate static for uint16 result.
+// ---------------------------------------------------------------------------
+
+static IcoMesh<uint16_t> fild_u16_result(0);
+
+int getFILDDtype(uintptr_t buf_ptr, int buf_len) {
+    if (buf_len < static_cast<int>(sizeof(FILDHeader))) return -1;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(buf_ptr);
+    FILDHeader header;
+    std::memcpy(&header, data, sizeof(FILDHeader));
+    return static_cast<int>(header.dtype);
+}
+
+val parseFILDUint16(uintptr_t buf_ptr, int buf_len, int k) {
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(buf_ptr);
+    const IcoTopology& topo = ico_topology(k);
+    fild_u16_result = deserialize_field<uint16_t>(data, static_cast<size_t>(buf_len), &topo);
+    return val(typed_memory_view(
+        fild_u16_result.num_cells(),
+        fild_u16_result.data()
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // Noise generation — result kept alive in a static.
 // ---------------------------------------------------------------------------
 
@@ -85,5 +111,7 @@ EMSCRIPTEN_BINDINGS(worldengine) {
     function("getNumCells", &getNumCells);
     function("getN", &getN);
     function("parseFILD", &parseFILD);
+    function("parseFILDUint16", &parseFILDUint16);
+    function("getFILDDtype", &getFILDDtype);
     function("generateNoise", &generateNoise);
 }

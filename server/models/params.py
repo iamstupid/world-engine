@@ -45,3 +45,30 @@ class WorldInfo(BaseModel):
     N: int
     mesh_type: str
     fields: list[str]
+
+
+class PlateParamsModel(BaseModel):
+    num_plates: int = 12
+    seed: int = 42
+    ocean_bias: float = 1.5
+    weight_octaves: int = 4
+    weight_frequency: float = 1.0
+    weight_lacunarity: float = 2.0
+    weight_gain: float = 0.5
+
+
+class PlateGenerateRequest(BaseModel):
+    world_id: str
+    plates: PlateParamsModel = PlateParamsModel()
+
+
+class BufferInfo(BaseModel):
+    name: str
+    dtype: str
+    display_name: str
+    colormap: str
+
+
+class BufferListResponse(BaseModel):
+    world_id: str
+    buffers: list[BufferInfo]

@@ -39,7 +39,7 @@ export class Engine {
         this.dirLight.position.set(5, 3, 4);
         this.scene.add(this.dirLight);
 
-        this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x1a1a2e, 0.4);
+        this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x344466, 0.6);
         this.scene.add(this.hemiLight);
 
         // Ocean sphere (semi-transparent blue at r=1.0)

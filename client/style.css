@@ -21,8 +21,8 @@ body {
 }
 
 #side-panel {
-    width: 250px;
-    min-width: 250px;
+    width: 260px;
+    min-width: 260px;
     height: 100vh;
     background: #16213e;
     border-right: 1px solid #0f3460;
@@ -91,9 +91,63 @@ hr {
     border-top: 1px solid #0f3460;
 }
 
+/* ===== Pipeline Sections ===== */
+.pipeline-section {
+    margin-bottom: 8px;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: rgba(15, 52, 96, 0.3);
+}
+
+.pipeline-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #c0c0d0;
+}
+
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.status-indicator.pending {
+    background: #555;
+}
+
+.status-indicator.done {
+    background: #4caf50;
+}
+
+.status-indicator.running {
+    background: #ffc107;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.pipeline-body {
+    margin-bottom: 6px;
+}
+
 /* ===== Parameter Controls ===== */
 .param-group {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .param-group label {
@@ -192,14 +246,14 @@ input[type="number"]:focus {
     color: #ffffff;
 }
 
-#btn-generate {
+.step-button {
     width: 100%;
-    padding: 10px 16px;
+    padding: 8px 12px;
     background: #e94560;
     border: none;
-    border-radius: 6px;
+    border-radius: 5px;
     color: #ffffff;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
     cursor: pointer;
     letter-spacing: 0.5px;
@@ -207,13 +261,80 @@ input[type="number"]:focus {
     margin-top: 4px;
 }
 
-#btn-generate:hover {
+.step-button:hover {
     background: #ff6b81;
 }
 
-#btn-generate:disabled {
+.step-button:disabled {
     background: #555;
     cursor: not-allowed;
+}
+
+/* ===== Layer Selector ===== */
+.layer-selector {
+    margin-top: 8px;
+}
+
+.layer-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+}
+
+.layer-option label {
+    font-size: 12px;
+    color: #c0c0d0;
+    cursor: pointer;
+}
+
+.layer-option input[type="radio"] {
+    accent-color: #e94560;
+    cursor: pointer;
+}
+
+/* ===== Legend ===== */
+#legend-container {
+    display: none;
+    margin-top: 4px;
+    padding: 8px 10px;
+    background: rgba(15, 52, 96, 0.3);
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+}
+
+.legend-gradient-bar {
+    width: 100%;
+    height: 14px;
+    border-radius: 3px;
+}
+
+.legend-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #808090;
+    margin-top: 3px;
+}
+
+.legend-swatch-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0;
+}
+
+.legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.legend-swatch-label {
+    font-size: 11px;
+    color: #a0a0b0;
 }
 
 /* ===== Status Bar ===== */

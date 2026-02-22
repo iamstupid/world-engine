@@ -5,6 +5,7 @@ if(EMSCRIPTEN)
     add_executable(worldengine_wasm
         mesh/ico_topology.cpp
         noise/noise_generator.cpp
+        tectonics/plate_assign.cpp
         io/serialize.cpp
         integration/wasm_bindings.cpp
     )
@@ -54,6 +55,7 @@ else()
         mesh/ico_topology.cpp
         legacy/noise/noise_generator.cpp
         noise/noise_generator.cpp
+        tectonics/plate_assign.cpp
         legacy/io/serialize.cpp
         io/serialize.cpp
     )
@@ -98,6 +100,9 @@ else()
 
     add_executable(test_locate tests/test_locate.cpp)
     target_link_libraries(test_locate PRIVATE worldengine)
+
+    add_executable(test_plate_assign tests/test_plate_assign.cpp)
+    target_link_libraries(test_plate_assign PRIVATE worldengine)
 
     # Visual tests
     add_executable(bench_neighbors tests/bench_neighbors.cpp)
