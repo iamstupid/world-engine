@@ -105,8 +105,10 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
   oss << params.erosion.fixed_point_iterations << ',' << params.erosion.multigrid_levels
       << ',' << params.erosion.k << ',' << params.erosion.m << ','
       << params.erosion.time_years << ',' << params.erosion.enable_hillslope << ','
-      << params.erosion.hillslope_k << ',' << params.erosion.enable_thermal << ','
-      << params.erosion.thermal_critical_slope << '|';
+      << params.erosion.hillslope_k << ',' << params.erosion.hack_c << ','
+      << params.erosion.hack_h << ',' << params.erosion.enable_thermal << ','
+      << params.erosion.thermal_critical_slope << ','
+      << params.erosion.fixed_point_ema << '|';
   oss << params.hydrology.river_area_threshold_m2 << ',' << params.hydrology.sea_level_m;
   return hex64(fnv1a64(oss.str()));
 }

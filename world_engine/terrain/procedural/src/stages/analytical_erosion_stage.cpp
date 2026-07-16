@@ -54,33 +54,6 @@ std::vector<float> downsample_average(const std::vector<float>& src, int sw, int
   return out;
 }
 
-std::vector<float> upsample_bilinear(const std::vector<float>& src, int sw, int sh, int dw, int dh) {
-  std::vector<float> out(dw * dh, 0.0f);
-  for (int y = 0; y < dh; ++y) {
-    const float v = (static_cast<float>(y) + 0.5f) * static_cast<float>(sh) / static_cast<float>(dh) - 0.5f;
-    const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, sh - 1);
-    const int y1 = std::clamp(y0 + 1, 0, sh - 1);
-    const float ty = std::clamp(v - static_cast<float>(y0), 0.0f, 1.0f);
-    for (int x = 0; x < dw; ++x) {
-      const float u = (static_cast<float>(x) + 0.5f) * static_cast<float>(sw) / static_cast<float>(dw) - 0.5f;
-      int x0 = static_cast<int>(std::floor(u));
-      int x1 = x0 + 1;
-      const float tx = std::clamp(u - static_cast<float>(x0), 0.0f, 1.0f);
-      x0 = (x0 % sw + sw) % sw;
-      x1 = (x1 % sw + sw) % sw;
-
-      const float c00 = src[y0 * sw + x0];
-      const float c10 = src[y0 * sw + x1];
-      const float c01 = src[y1 * sw + x0];
-      const float c11 = src[y1 * sw + x1];
-      const float c0 = c00 + (c10 - c00) * tx;
-      const float c1 = c01 + (c11 - c01) * tx;
-      out[y * dw + x] = c0 + (c1 - c0) * ty;
-    }
-  }
-  return out;
-}
-
 int north_neighbor(const TerrainDomain& domain, int x, int y) {
   if (y > 0) {
     return domain.index(x, y - 1);
@@ -312,21 +285,45 @@ void flow_accumulation(const TerrainDomain& domain, const std::vector<float>& z,
   }
 }
 
-void apply_hillslope(const TerrainDomain& domain, float kh, std::vector<float>& z) {
-  std::vector<float> out(z.size(), 0.0f);
+// Jittered bilinear upsample for the multigrid prolongation (Tzathas 5.2):
+// plain upsampling makes rivers follow coarse-block boundaries with sharp
+// turns; a deterministic sub-cell offset in [-0.25, 0.25]^2 breaks this.
+std::vector<float> upsample_bilinear_jitter(const std::vector<float>& src, int sw, int sh,
+                                            int dw, int dh, int seed, int level) {
+  std::vector<float> out(dw * dh, 0.0f);
   #pragma omp parallel for schedule(static)
-  for (int y = 0; y < domain.height(); ++y) {
-    for (int x = 0; x < domain.width(); ++x) {
-      const int c = domain.index(x, y);
-      const int l = domain.index(x - 1, y);
-      const int r = domain.index(x + 1, y);
-      const int u = north_neighbor(domain, x, y);
-      const int d = south_neighbor(domain, x, y);
-      const float lap = z[l] + z[r] + z[u] + z[d] - 4.0f * z[c];
-      out[c] = z[c] + kh * lap;
+  for (int y = 0; y < dh; ++y) {
+    for (int x = 0; x < dw; ++x) {
+      const uint64_t key = static_cast<uint64_t>(seed) * 0x9E3779B1ULL +
+                           static_cast<uint64_t>(level) * 0x85EBCA77ULL +
+                           static_cast<uint64_t>(y) * 0xC2B2AE3DULL +
+                           static_cast<uint64_t>(x);
+      const float ju = (deterministic_rand01(key) - 0.5f) * 0.5f;
+      const float jv = (deterministic_rand01(key + 0x27D4EB2FULL) - 0.5f) * 0.5f;
+      const float v = (static_cast<float>(y) + 0.5f + jv) * static_cast<float>(sh) /
+                          static_cast<float>(dh) -
+                      0.5f;
+      const float u = (static_cast<float>(x) + 0.5f + ju) * static_cast<float>(sw) /
+                          static_cast<float>(dw) -
+                      0.5f;
+      const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, sh - 1);
+      const int y1 = std::clamp(y0 + 1, 0, sh - 1);
+      const float ty = std::clamp(v - static_cast<float>(y0), 0.0f, 1.0f);
+      int x0 = static_cast<int>(std::floor(u));
+      int x1 = x0 + 1;
+      const float tx = std::clamp(u - static_cast<float>(x0), 0.0f, 1.0f);
+      x0 = (x0 % sw + sw) % sw;
+      x1 = (x1 % sw + sw) % sw;
+      const float c00 = src[y0 * sw + x0];
+      const float c10 = src[y0 * sw + x1];
+      const float c01 = src[y1 * sw + x0];
+      const float c11 = src[y1 * sw + x1];
+      const float c0 = c00 + (c10 - c00) * tx;
+      const float c1 = c01 + (c11 - c01) * tx;
+      out[y * dw + x] = c0 + (c1 - c0) * ty;
     }
   }
-  z.swap(out);
+  return out;
 }
 
 void apply_thermal_constraint(const TerrainDomain& domain, float critical_slope,
@@ -411,7 +408,36 @@ void solve_fixed_point_level(const TerrainDomain& domain, const ErosionParams& e
         dist = std::max(1.0f, distance_to_neighbor(domain, x, y, r));
       }
 
-      const float a = static_cast<float>(eparams.k * std::pow(std::max(1.0f, area[idx]), eparams.m));
+      // Fluvial advection velocity a(s) = k * A^m ...
+      float a = static_cast<float>(eparams.k * std::pow(std::max(1.0f, area[idx]), eparams.m));
+      // ... with the single-receiver slope correction (Tzathas Section 4.3):
+      // a *= dist * ||grad z|| / (z - z_r), gradient from per-axis downstream
+      // differences. Removes axis-aligned isoline artifacts.
+      {
+        const auto [x, y] = domain.unindex(idx);
+        const float zc = filled.filled_z[idx];
+        const float ze = filled.filled_z[domain.index(x + 1, y)];
+        const float zw = filled.filled_z[domain.index(x - 1, y)];
+        const float zn = filled.filled_z[north_neighbor(domain, x, y)];
+        const float zs = filled.filled_z[south_neighbor(domain, x, y)];
+        const float ew = std::max(1.0f, static_cast<float>(domain.east_west_spacing_m(y)));
+        const float ns = std::max(1.0f, static_cast<float>(domain.north_south_spacing_m()));
+        const float gx = std::max(0.0f, zc - std::min(ze, zw)) / ew;
+        const float gy = std::max(0.0f, zc - std::min(zn, zs)) / ns;
+        const float grad = std::sqrt(gx * gx + gy * gy);
+        const float drop = zc - filled.filled_z[r];
+        if (drop > 1e-3f && grad > 0.0f) {
+          const float corr = std::clamp(dist * grad / drop, 0.5f, 2.5f);
+          a *= corr;
+        }
+      }
+      // Hillslope contribution enters the advection coefficient
+      // (Tzathas Eq 26): a += (k_h / C) * A^(-h).
+      if (eparams.enable_hillslope) {
+        a += static_cast<float>(
+            (eparams.hillslope_k / eparams.hack_c) *
+            std::pow(std::max(1.0f, area[idx]), -eparams.hack_h));
+      }
       const float denom = std::max(1e-8f, a);
       const float lambda = std::exp(-denom * dt / dist);
       // Use the effective receiver elevation (already sea_level for outlets)
@@ -425,15 +451,16 @@ void solve_fixed_point_level(const TerrainDomain& domain, const ErosionParams& e
       }
     }
 
-    if (eparams.enable_hillslope) {
-      apply_hillslope(domain, static_cast<float>(eparams.hillslope_k), z_new);
-    }
     if (eparams.enable_thermal) {
       apply_thermal_constraint(domain, static_cast<float>(eparams.thermal_critical_slope),
                                receiver, receiver_dir, z_new);
     }
-    // Restore outlet elevations
+    // Fixed-point damping (Tzathas 5.1): blend with the previous iterate to
+    // prevent oscillation at small t / large initial discontinuities.
+    const float ema = std::clamp(static_cast<float>(eparams.fixed_point_ema), 0.05f, 1.0f);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; ++i) {
+      z_new[i] = ema * z_new[i] + (1.0f - ema) * z_work[i];
       if (outlet[i]) {
         z_new[i] = sea_level_m;
       }
@@ -531,7 +558,7 @@ void run_analytical_erosion_stage(const PipelineParams& params, TerrainDataset& 
     if (factor == 1) {
       z_guess = std::move(zg);
     } else {
-      z_guess = upsample_bilinear(zg, cw, ch, w, h);
+      z_guess = upsample_bilinear_jitter(zg, cw, ch, w, h, params.seed, level);
     }
   }
 

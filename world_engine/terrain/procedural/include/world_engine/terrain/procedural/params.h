@@ -74,11 +74,19 @@ struct ErosionParams {
   int multigrid_levels = 5;
   double k = 1.2e-6;               // moderate erosion preserves mountain height
   double m = 0.45;
-  double time_years = 200000.0;     // less time to preserve peaks
+  double time_years = 2.0e6;        // ~landscape response time; big channels
+                                    // reach steady state, ridges stay young
+  // Hillslope enters the advection coefficient (Tzathas Eq 26):
+  //   a(s) = k*A^m + (k_h / C) * A^(-h)
   bool enable_hillslope = true;
-  double hillslope_k = 0.02;
+  double hillslope_k = 0.05;        // k_h [m^2/yr]
+  double hack_c = 1.5;              // Hack's law constant C
+  double hack_h = 0.6;              // Hack's law exponent h
   bool enable_thermal = true;
   double thermal_critical_slope = 0.577350269;  // tan(30deg)
+  // Fixed-point damping (Tzathas 5.1): exponential moving average between
+  // iterations prevents oscillation at small t.
+  double fixed_point_ema = 0.65;    // weight of the fresh solution
 };
 
 struct HydrologyParams {
