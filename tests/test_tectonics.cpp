@@ -114,6 +114,56 @@ int main() {
     ++failures;
   }
 
+  // Gate 3 (M2): oceanic age structure. Ridge renewal + age-driven dampening
+  // must produce ocean floor whose depth increases with age (the Eulerian
+  // re-stamping bug produced elevation decoupled from any age field).
+  {
+    const auto& age = after.float_layer("oceanic_age_myr");
+    const auto& elev = after.float_layer("tectonic_elevation_m");
+    const auto& crust = after.u8_layer("crust_type");
+    double sa = 0.0;
+    double se = 0.0;
+    double saa = 0.0;
+    double see = 0.0;
+    double sae = 0.0;
+    int n = 0;
+    double young = 0.0;
+    double old_crust = 0.0;
+    for (size_t i = 0; i < age.size(); ++i) {
+      if (crust[i] != 0) {
+        continue;
+      }
+      const double a = age[i];
+      const double e = elev[i];
+      sa += a;
+      se += e;
+      saa += a * a;
+      see += e * e;
+      sae += a * e;
+      ++n;
+      if (a < 15.0) {
+        young += 1.0;
+      }
+      if (a > 60.0) {
+        old_crust += 1.0;
+      }
+    }
+    const double cov = sae / n - (sa / n) * (se / n);
+    const double var_a = saa / n - (sa / n) * (sa / n);
+    const double var_e = see / n - (se / n) * (se / n);
+    const double corr = cov / std::sqrt(std::max(1e-9, var_a * var_e));
+    std::printf("ocean age/elevation correlation: %.3f (young frac %.3f, old frac %.3f)\n",
+                corr, young / n, old_crust / n);
+    if (corr > -0.3) {
+      std::printf("FAIL: ocean depth not age-driven (re-stamping or dead ridges)\n");
+      ++failures;
+    }
+    if (young / n < 0.02) {
+      std::printf("FAIL: no young oceanic crust - ridges inactive\n");
+      ++failures;
+    }
+  }
+
   if (failures != 0) {
     return 1;
   }

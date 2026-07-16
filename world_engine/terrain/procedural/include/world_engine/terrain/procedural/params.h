@@ -23,7 +23,7 @@ struct TectonicsParams {
 
   // Initial crust distribution (per-cell, independent of plate partition).
   double continent_ratio = 0.40;      // fraction of cells continental at t=0
-  double continent_noise_freq = 1.1;  // unit-sphere frequency of seed patches
+  double continent_noise_freq = 0.7;  // unit-sphere frequency of seed patches
 
   // Reference elevations (paper Appendix A).
   double continental_base_m = 400.0;

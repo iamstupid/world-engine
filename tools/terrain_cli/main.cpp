@@ -412,7 +412,20 @@ int main(int argc, char** argv) {
   }
   if (ds.has_layer("tectonic_elevation_m")) {
     const auto& tectonic = ds.float_layer("tectonic_elevation_m");
+    write_png8_elevation_color((out_path / "stage_1_tectonic_color.png").string(), tectonic, w, h,
+                               params.hydrology.sea_level_m);
     write_png8_preview((out_path / "stage_1_tectonic_gray.png").string(), tectonic, w, h);
+  }
+  if (ds.has_layer("crust_type")) {
+    write_png8_mask((out_path / "crust_type.png").string(), ds.u8_layer("crust_type"), w, h);
+  }
+  if (ds.has_layer("oceanic_age_myr")) {
+    write_png8_preview((out_path / "oceanic_age.png").string(),
+                       ds.float_layer("oceanic_age_myr"), w, h);
+  }
+  if (ds.has_layer("uplift_rate_m_per_yr")) {
+    write_png8_preview((out_path / "uplift_rate.png").string(),
+                       ds.float_layer("uplift_rate_m_per_yr"), w, h);
   }
   if (ds.has_layer("elevation_base_m")) {
     const auto& base = ds.float_layer("elevation_base_m");
