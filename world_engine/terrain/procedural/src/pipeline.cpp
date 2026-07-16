@@ -97,6 +97,7 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
       << tp.min_plate_speed_frac << ',' << tp.subduction_uplift_mm_yr << ','
       << tp.subduction_distance_km << ',' << tp.collision_coeff_per_km << ','
       << tp.collision_distance_km << ',' << tp.collision_interpen_km << ','
+      << tp.collision_max_uplift_m << ',' << tp.slab_pull_strength << ','
       << tp.rift_events_per_100myr << ',' << tp.continental_erosion_mm_yr << ','
       << tp.oceanic_dampening_mm_yr << ',' << tp.sediment_accretion_mm_yr << ','
       << tp.uplift_window_myr << ',' << tp.noise_detail_mix

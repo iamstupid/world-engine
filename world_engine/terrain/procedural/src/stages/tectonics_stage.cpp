@@ -33,6 +33,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <queue>
 #include <utility>
 #include <vector>
@@ -176,6 +177,9 @@ struct CrustSample {
   double orogeny_age_myr = 0.0;
   uint8_t type = 0;
   uint8_t orogeny_type = 0;
+  // Losing continental plate when two continental claims overlap here
+  // (collision tracking, paper Sections 4.2 / 6).
+  int cont_runner_up = -1;
 };
 
 CrustSample sample_plate(const GeodesicGrid& grid, const Crust& crust,
@@ -235,6 +239,10 @@ CrustSample sample_world(const GeodesicGrid& grid, const Crust& crust,
                          const std::vector<Plate>& plates, const Vec3d& p) {
   CrustSample best;
   double best_score = -1.0;
+  int cont_best = -1;
+  int cont_second = -1;
+  double cont_best_cov = 0.0;
+  double cont_second_cov = 0.0;
   for (int pl = 0; pl < static_cast<int>(plates.size()); ++pl) {
     const CrustSample s = sample_plate(grid, crust, plates, pl, p);
     if (!s.found) {
@@ -243,6 +251,15 @@ CrustSample sample_world(const GeodesicGrid& grid, const Crust& crust,
     double score = s.coverage;
     if (s.type == 1) {
       score += 10.0;
+      if (s.coverage > cont_best_cov) {
+        cont_second = cont_best;
+        cont_second_cov = cont_best_cov;
+        cont_best = pl;
+        cont_best_cov = s.coverage;
+      } else if (s.coverage > cont_second_cov) {
+        cont_second = pl;
+        cont_second_cov = s.coverage;
+      }
     } else {
       score += 0.15 * std::max(0.0, 1.0 - s.age_myr / 80.0);  // younger overrides
     }
@@ -250,6 +267,11 @@ CrustSample sample_world(const GeodesicGrid& grid, const Crust& crust,
       best_score = score;
       best = s;
     }
+  }
+  // Meaningful continental interpenetration only (both claims substantial).
+  if (best.type == 1 && cont_second >= 0 && cont_second_cov > 0.25 &&
+      best.plate == cont_best) {
+    best.cont_runner_up = cont_second;
   }
   return best;
 }
@@ -396,10 +418,33 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
   // Runs on the canonical configuration (immediately after init/resample,
   // when all plate deltas are identity).
   FrontFields fronts;
-  const auto compute_front_fields = [&]() {
+  const auto compute_front_fields = [&](double window_myr) {
     fronts.resize(n_cells);
     using QE = std::pair<double, int>;  // (distance_km, cell)
     std::priority_queue<QE, std::vector<QE>, std::greater<QE>> queue;
+
+    // Plate centroids (for slab pull, paper Section 4.1).
+    const int np = static_cast<int>(plates.size());
+    std::vector<Vec3d> centroid(np, Vec3d{0.0, 0.0, 0.0});
+    std::vector<int> members(np, 0);
+    for (int i = 0; i < n_cells; ++i) {
+      const int p = crust.plate[i];
+      const Vec3d& c = grid.cell_center(i);
+      centroid[p].x += c.x;
+      centroid[p].y += c.y;
+      centroid[p].z += c.z;
+      ++members[p];
+    }
+    for (int p = 0; p < np; ++p) {
+      if (members[p] > 0) {
+        const double n = std::sqrt(dot(centroid[p], centroid[p]));
+        if (n > 1e-9) {
+          centroid[p] = mul(centroid[p], 1.0 / n);
+        }
+      }
+    }
+    std::vector<Vec3d> pull(np, Vec3d{0.0, 0.0, 0.0});
+    std::vector<int> pull_n(np, 0);
 
     std::array<int, 6> nb{};
     for (int i = 0; i < n_cells; ++i) {
@@ -444,6 +489,18 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
           continue;
         }
         overriding = true;
+        // Slab pull (Section 4.1): the subducting plate's axis drifts so its
+        // motion pulls it toward this front point.
+        {
+          const Vec3d slab_dir = cross(centroid[pj], ci);
+          const double sn = std::sqrt(dot(slab_dir, slab_dir));
+          if (sn > 1e-9) {
+            pull[pj].x += slab_dir.x / sn;
+            pull[pj].y += slab_dir.y / sn;
+            pull[pj].z += slab_dir.z / sn;
+            ++pull_n[pj];
+          }
+        }
         // g(v) uses the normal closing speed: oblique (shear-dominated)
         // boundaries produce little subduction flux.
         if (closing_mm_yr > best_speed) {
@@ -488,6 +545,30 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
         }
       }
     }
+
+    // Apply slab pull: w <- normalize(w + strength * (window/100My) * dir).
+    if (window_myr > 0.0 && tp.slab_pull_strength > 0.0) {
+      for (int p = 0; p < np; ++p) {
+        if (pull_n[p] == 0) {
+          continue;
+        }
+        const double pn = std::sqrt(dot(pull[p], pull[p]));
+        if (pn < 1e-9) {
+          continue;  // fronts on opposite sides cancel
+        }
+        const Vec3d dir = mul(pull[p], 1.0 / pn);
+        const double blend = tp.slab_pull_strength * (window_myr / 100.0) *
+                             std::min(1.0, pn / std::max(1, pull_n[p]) * 4.0);
+        Vec3d w = plates[p].axis;
+        w.x += blend * dir.x;
+        w.y += blend * dir.y;
+        w.z += blend * dir.z;
+        const double wn = std::sqrt(dot(w, w));
+        if (wn > 1e-9) {
+          plates[p].axis = mul(w, 1.0 / wn);
+        }
+      }
+    }
   };
 
   // ---- Global resampling (paper Sections 4.3 / 6) ----
@@ -495,10 +576,17 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
   const int resample_every = std::max(1, tp.resample_interval_steps);
   double window_myr = 0.0;  // simulated time since last resample
 
+  int resample_counter = 0;
+  // Collision cooldown per (winner, loser) pair: sustained convergence of two
+  // large continental plates would otherwise re-fire a full-surge event every
+  // resample (progressive accretion overcounting).
+  std::vector<std::pair<int64_t, int>> collision_history;
   const auto global_resample = [&](double elapsed_myr) {
+    ++resample_counter;
     Crust next;
     next.resize(n_cells);
     std::vector<uint8_t> is_gap(n_cells, 0);
+    std::vector<int32_t> overlap_loser(n_cells, -1);
 
     #pragma omp parallel for schedule(dynamic, 256)
     for (int i = 0; i < n_cells; ++i) {
@@ -512,6 +600,7 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
         next.orogeny_type[i] = s.orogeny_type;
         next.orogeny_age_myr[i] = static_cast<float>(s.orogeny_age_myr);
         next.uplift_ema_m_yr[i] = static_cast<float>(s.uplift_ema_m_yr);
+        overlap_loser[i] = s.cont_runner_up;
       } else {
         is_gap[i] = 1;
       }
@@ -635,6 +724,330 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
       next.uplift_ema_m_yr[i] = 0.0f;
     }
 
+    // ---- Continental collision events (paper Section 4.2 / Section 6) ----
+    // Interpenetration cells were recorded during arbitration. An event
+    // fires per (winner, loser) plate pair once the overlap penetrates
+    // deeper than collision_interpen_km; the loser's colliding terrane is
+    // sutured onto the winner and an instantaneous, compactly supported
+    // elevation surge is applied.
+    {
+      std::vector<std::pair<int64_t, int>> pair_cells;
+      for (int i = 0; i < n_cells; ++i) {
+        if (overlap_loser[i] >= 0 && overlap_loser[i] != next.plate[i]) {
+          const int64_t key =
+              (static_cast<int64_t>(next.plate[i]) << 24) | overlap_loser[i];
+          pair_cells.push_back({key, i});
+        }
+      }
+      std::sort(pair_cells.begin(), pair_cells.end());
+      const double uplift_tau_yr = std::max(1.0, tp.uplift_window_myr) * 1e6;
+      const double a0_km2 = 4.0 * kPi * radius_km * radius_km / plate_count;
+      int events = 0;
+
+      size_t lo = 0;
+      std::array<int, 6> nb{};
+      while (lo < pair_cells.size() && events < 2) {
+        size_t hi = lo;
+        while (hi < pair_cells.size() && pair_cells[hi].first == pair_cells[lo].first) {
+          ++hi;
+        }
+        const int64_t pair_key = pair_cells[lo].first;
+        const int winner = static_cast<int>(pair_key >> 24);
+        const int loser = static_cast<int>(pair_key & 0xFFFFFF);
+        std::vector<int> overlap;
+        overlap.reserve(hi - lo);
+        for (size_t k = lo; k < hi; ++k) {
+          overlap.push_back(pair_cells[k].second);
+        }
+        lo = hi;
+
+        // Cooldown: at most one event per plate pair every 3 resamples.
+        bool on_cooldown = false;
+        for (const auto& [key, when] : collision_history) {
+          if (key == pair_key && resample_counter - when < 3) {
+            on_cooldown = true;
+            break;
+          }
+        }
+        if (on_cooldown) {
+          continue;
+        }
+
+        // Penetration depth: distance-to-edge inside the overlap set.
+        std::vector<uint8_t> in_set(n_cells, 0);
+        for (int c : overlap) {
+          in_set[c] = 1;
+        }
+        using QE = std::pair<double, int>;
+        std::priority_queue<QE, std::vector<QE>, std::greater<QE>> queue;
+        std::vector<float> depth(n_cells, 1e30f);
+        for (int c : overlap) {
+          const int m = grid.neighbors(c, nb);
+          for (int k = 0; k < m; ++k) {
+            if (!in_set[nb[k]]) {
+              depth[c] = 0.0f;
+              queue.push({0.0, c});
+              break;
+            }
+          }
+        }
+        double max_depth = 0.0;
+        while (!queue.empty()) {
+          const auto [d, i] = queue.top();
+          queue.pop();
+          if (d > depth[i] + 1e-6) {
+            continue;
+          }
+          max_depth = std::max(max_depth, d);
+          const int m = grid.neighbors(i, nb);
+          for (int k = 0; k < m; ++k) {
+            const int j = nb[k];
+            if (!in_set[j]) {
+              continue;
+            }
+            const double nd =
+                d + angular_dist(grid.cell_center(i), grid.cell_center(j)) * radius_km;
+            if (nd < depth[j]) {
+              depth[j] = static_cast<float>(nd);
+              queue.push({nd, j});
+            }
+          }
+        }
+        if (max_depth < tp.collision_interpen_km) {
+          continue;  // still interpenetrating; keep tracking
+        }
+
+        // Terrane R: the loser's continental region connected to the overlap.
+        std::vector<int> terrane;
+        {
+          std::vector<int> stack = overlap;
+          std::vector<uint8_t> seen(n_cells, 0);
+          for (int c : overlap) {
+            seen[c] = 1;
+          }
+          while (!stack.empty()) {
+            const int i = stack.back();
+            stack.pop_back();
+            const int m = grid.neighbors(i, nb);
+            for (int k = 0; k < m; ++k) {
+              const int j = nb[k];
+              if (seen[j] || next.plate[j] != loser || next.type[j] != 1) {
+                continue;
+              }
+              seen[j] = 1;
+              terrane.push_back(j);
+              stack.push_back(j);
+            }
+          }
+        }
+
+        // Surge geometry uses the INTERPENETRATION area, not the whole
+        // terrane: the doubled crust in the overlap drives the uplift.
+        // (Reading A as the full terrane area makes delta_c * A explode to
+        // tens of km for subcontinents; with the overlap area the formula is
+        // self-consistent across terrane sizes: ~300 km x front length gives
+        // Himalayan-scale surges and belt-scale influence radii.)
+        Vec3d q{0.0, 0.0, 0.0};
+        double area_km2 = 0.0;
+        for (int c : overlap) {
+          const Vec3d& pc = grid.cell_center(c);
+          const double a = grid.cell_area_sr(c) * radius_km * radius_km;
+          q.x += a * pc.x;
+          q.y += a * pc.y;
+          q.z += a * pc.z;
+          area_km2 += a;
+        }
+        const double qn = std::sqrt(dot(q, q));
+        if (qn < 1e-9 || area_km2 <= 0.0) {
+          continue;
+        }
+        q = mul(q, 1.0 / qn);
+
+        // r = r_c * sqrt((v/v0) * (A/A0)); surge = min(cap, delta_c * A).
+        const Vec3d rel = sub(plate_velocity_mm_yr(loser, q),
+                              plate_velocity_mm_yr(winner, q));
+        const double v = std::sqrt(dot(rel, rel));
+        const double r_km =
+            std::min(tp.collision_distance_km,
+                     tp.collision_distance_km *
+                         std::sqrt(std::max(1e-6, (v / tp.max_plate_speed_mm_yr) *
+                                                       (area_km2 / a0_km2))));
+        const double surge_m = std::min(
+            tp.collision_max_uplift_m, tp.collision_coeff_per_km * area_km2 * 1000.0);
+
+        // Influence region: Minkowski offset of the overlap by r (Dijkstra
+        // across all plates), surge with Wendland falloff (1-(d/r)^2)^2.
+        std::vector<float> infl(n_cells, 1e30f);
+        while (!queue.empty()) {
+          queue.pop();
+        }
+        for (int c : overlap) {
+          infl[c] = 0.0f;
+          queue.push({0.0, c});
+        }
+        while (!queue.empty()) {
+          const auto [d, i] = queue.top();
+          queue.pop();
+          if (d > infl[i] + 1e-6 || d > r_km) {
+            continue;
+          }
+          const int m = grid.neighbors(i, nb);
+          for (int k = 0; k < m; ++k) {
+            const int j = nb[k];
+            const double nd =
+                d + angular_dist(grid.cell_center(i), grid.cell_center(j)) * radius_km;
+            if (nd < infl[j]) {
+              infl[j] = static_cast<float>(nd);
+              queue.push({nd, j});
+            }
+          }
+        }
+        for (int i = 0; i < n_cells; ++i) {
+          if (infl[i] > r_km) {
+            continue;
+          }
+          const double t = infl[i] / r_km;
+          const double falloff = (1.0 - t * t) * (1.0 - t * t);
+          const double dz = surge_m * falloff;
+          if (dz < 25.0) {
+            continue;
+          }
+          next.elevation_m[i] = static_cast<float>(
+              std::min(tp.max_continental_m, static_cast<double>(next.elevation_m[i]) + dz));
+          if (next.type[i] == 1 && dz > 200.0) {
+            next.orogeny_type[i] = 2;  // Himalayan
+            next.orogeny_age_myr[i] = 0.0f;
+          }
+          next.uplift_ema_m_yr[i] += static_cast<float>(dz / uplift_tau_yr);
+        }
+
+        // Suture: the terrane transfers to the winning plate.
+        for (int c : terrane) {
+          next.plate[c] = winner;
+        }
+        collision_history.push_back({pair_key, resample_counter});
+        std::printf(
+            "  [tectonics] collision: plate %d sutures terrane of plate %d "
+            "(overlap %.0f km2, surge %.0f m, r %.0f km)\n",
+            winner, loser, area_km2, surge_m, r_km);
+        ++events;
+      }
+    }
+
+    // ---- Rifting events (paper Section 4.4) ----
+    // P = lambda * exp(-lambda), lambda = lambda0 * f(x_P) * A/A0 scaled by
+    // the elapsed window; fragments get diverging rotations away from the
+    // parent centroid.
+    {
+      const int np = static_cast<int>(plates.size());
+      std::vector<int> count(np, 0);
+      std::vector<int> cont(np, 0);
+      std::vector<Vec3d> centroid(np, Vec3d{0.0, 0.0, 0.0});
+      for (int i = 0; i < n_cells; ++i) {
+        const int p = next.plate[i];
+        ++count[p];
+        cont[p] += next.type[i];
+        const Vec3d& c = grid.cell_center(i);
+        centroid[p].x += c.x;
+        centroid[p].y += c.y;
+        centroid[p].z += c.z;
+      }
+      const double a0_cells = static_cast<double>(n_cells) / plate_count;
+      int rifts = 0;
+      for (int p = 0; p < np && rifts < 2; ++p) {
+        if (count[p] < 128 || static_cast<int>(plates.size()) >= 60) {
+          continue;
+        }
+        const double x_p = static_cast<double>(cont[p]) / count[p];
+        const double lambda = tp.rift_events_per_100myr * (elapsed_myr / 100.0) *
+                              (0.25 + 0.75 * x_p) * (count[p] / a0_cells);
+        const uint64_t key = seed * 0x9E3779B1ULL +
+                             static_cast<uint64_t>(p) * 0xC2B2AE35ULL +
+                             static_cast<uint64_t>(resample_counter) * 0x165667B1ULL;
+        if (unit_rand(key) >= lambda * std::exp(-lambda)) {
+          continue;
+        }
+        // Fragment count n in [2, 4] (paper 4.4).
+        const int n_frag = 2 + static_cast<int>(unit_rand(key + 1) * 3.0) % 3;
+        std::vector<int> members;
+        members.reserve(count[p]);
+        for (int i = 0; i < n_cells; ++i) {
+          if (next.plate[i] == p) {
+            members.push_back(i);
+          }
+        }
+        // Fragment seeds: random member cells; warped-distance partition.
+        std::vector<Vec3d> frag_seed(n_frag);
+        std::vector<Vec3d> frag_warp(n_frag);
+        std::vector<double> frag_phase(n_frag);
+        for (int f = 0; f < n_frag; ++f) {
+          frag_seed[f] =
+              grid.cell_center(members[static_cast<size_t>(unit_rand(key + 10 + f) *
+                                                           members.size()) %
+                                       members.size()]);
+          frag_warp[f] = random_unit_vec(key + 40 + f);
+          frag_phase[f] = unit_rand(key + 70 + f) * 2.0 * kPi;
+        }
+        std::vector<int> frag_plate(n_frag, p);
+        for (int f = 1; f < n_frag; ++f) {
+          frag_plate[f] = static_cast<int>(plates.size());
+          Plate fresh;
+          fresh.omega_rad_myr =
+              (tp.min_plate_speed_frac +
+               (1.0 - tp.min_plate_speed_frac) * unit_rand(key + 100 + f)) *
+              omega_max_rad_myr;
+          plates.push_back(fresh);
+        }
+        std::vector<Vec3d> frag_centroid(n_frag, Vec3d{0.0, 0.0, 0.0});
+        for (int i : members) {
+          const Vec3d& c = grid.cell_center(i);
+          int best = 0;
+          double best_score = -1e30;
+          for (int f = 0; f < n_frag; ++f) {
+            const double score = dot(c, frag_seed[f]) +
+                                 0.05 * std::sin(11.0 * dot(c, frag_warp[f]) + frag_phase[f]);
+            if (score > best_score) {
+              best_score = score;
+              best = f;
+            }
+          }
+          next.plate[i] = frag_plate[best];
+          frag_centroid[best].x += c.x;
+          frag_centroid[best].y += c.y;
+          frag_centroid[best].z += c.z;
+        }
+        // Diverging rotations: velocity at each fragment centroid points away
+        // from the parent centroid.
+        Vec3d cp = centroid[p];
+        const double cpn = std::sqrt(dot(cp, cp));
+        cp = (cpn > 1e-9) ? mul(cp, 1.0 / cpn) : Vec3d{0.0, 0.0, 1.0};
+        for (int f = 0; f < n_frag; ++f) {
+          Vec3d cf = frag_centroid[f];
+          const double cfn = std::sqrt(dot(cf, cf));
+          if (cfn < 1e-9) {
+            continue;
+          }
+          cf = mul(cf, 1.0 / cfn);
+          Vec3d away = sub(cf, cp);
+          away = sub(away, mul(cf, dot(away, cf)));  // tangent at cf
+          const double an = std::sqrt(dot(away, away));
+          if (an < 1e-6) {
+            plates[frag_plate[f]].axis = random_unit_vec(key + 130 + f);
+            continue;
+          }
+          away = mul(away, 1.0 / an);
+          Vec3d axis = cross(cf, away);
+          const double axn = std::sqrt(dot(axis, axis));
+          if (axn > 1e-9) {
+            plates[frag_plate[f]].axis = mul(axis, 1.0 / axn);
+          }
+        }
+        std::printf("  [tectonics] rift: plate %d splits into %d fragments\n", p,
+                    n_frag);
+        ++rifts;
+      }
+    }
+
     crust = std::move(next);
     for (Plate& p : plates) {
       p.delta = Mat3{};
@@ -642,7 +1055,7 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
   };
 
   // ---- Simulation loop ----
-  compute_front_fields();
+  compute_front_fields(0.0);
   const double dt = tp.dt_myr;
   const double ema_alpha = std::clamp(dt / std::max(1.0, tp.uplift_window_myr), 0.0, 1.0);
 
@@ -708,10 +1121,10 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
           (uplift_rate_m_yr - crust.uplift_ema_m_yr[i]) * ema_alpha);
     }
 
-    // 3. Global resampling.
+    // 3. Global resampling (+ collision/rift events, slab pull).
     if ((s + 1) % resample_every == 0) {
       global_resample(window_myr);
-      compute_front_fields();
+      compute_front_fields(window_myr);
       window_myr = 0.0;
     }
   }

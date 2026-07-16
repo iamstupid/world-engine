@@ -45,9 +45,16 @@ struct TectonicsParams {
   double collision_coeff_per_km = 1.3e-5;   // delta_c
   double collision_distance_km = 4200.0;    // r_c
   double collision_interpen_km = 300.0;     // event trigger threshold
+  // Cap on the instantaneous collision surge (delta_c * A alone reaches tens
+  // of km for subcontinent-sized terranes; the paper leaves this unregulated
+  // aside from the z_c clamp).
+  double collision_max_uplift_m = 3500.0;
 
   // Rifting (paper Section 4.4).
   double rift_events_per_100myr = 0.7;  // lambda_0 (paper leaves unspecified)
+
+  // Slab pull (paper Section 4.1): axis drift toward subduction fronts.
+  double slab_pull_strength = 0.3;  // axis blend fraction per 100 My
 
   // Per-step elevation modifications (paper Section 4.5), mm/yr.
   double continental_erosion_mm_yr = 0.03;  // eps_c

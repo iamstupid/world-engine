@@ -373,6 +373,12 @@ int main(int argc, char** argv) {
       params.tectonics.continent_ratio = std::clamp(std::stod(argv[++i]), 0.05, 0.95);
     } else if (a == "--noise-mix" && i + 1 < argc) {
       params.tectonics.noise_detail_mix = std::clamp(std::stod(argv[++i]), 0.0, 1.0);
+    } else if (a == "--slab-pull" && i + 1 < argc) {
+      params.tectonics.slab_pull_strength = std::max(0.0, std::stod(argv[++i]));
+    } else if (a == "--rift-rate" && i + 1 < argc) {
+      params.tectonics.rift_events_per_100myr = std::max(0.0, std::stod(argv[++i]));
+    } else if (a == "--collision-cap" && i + 1 < argc) {
+      params.tectonics.collision_max_uplift_m = std::max(0.0, std::stod(argv[++i]));
     } else if (a == "--write-pgm") {
       also_write_pgm = true;
     }
