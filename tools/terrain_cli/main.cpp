@@ -367,6 +367,8 @@ int main(int argc, char** argv) {
       params.tectonics.dt_myr = std::max(0.01, std::stod(argv[++i]));
     } else if (a == "--tect-freq" && i + 1 < argc) {
       params.tectonics.grid_frequency = std::max(4, std::stoi(argv[++i]));
+    } else if (a == "--phys-freq" && i + 1 < argc) {
+      params.physics_grid_frequency = std::max(0, std::stoi(argv[++i]));
     } else if (a == "--plates" && i + 1 < argc) {
       params.tectonics.plate_count = std::max(2, std::stoi(argv[++i]));
     } else if (a == "--continent-ratio" && i + 1 < argc) {

@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "world_engine/terrain/procedural/stages/analytical_erosion_stage.h"
+#include "world_engine/terrain/procedural/stages/geodesic_physics_stage.h"
 #include "world_engine/terrain/procedural/stages/hydrology_stage.h"
 #include "world_engine/terrain/procedural/stages/masks_stage.h"
 #include "world_engine/terrain/procedural/stages/noise_stage.h"
@@ -73,9 +74,13 @@ TerrainDataset Pipeline::run(const PipelineParams& params) {
   run_stage("noise", stages::run_noise_stage);
   run_stage("tectonics", stages::run_tectonics_stage);
   run_stage("combine", stages::run_combine_stage);
-  run_stage("analytical_erosion", stages::run_analytical_erosion_stage);
-  run_stage("hydrology", stages::run_hydrology_stage);
-  run_stage("masks", stages::run_masks_stage);
+  if (params.physics_grid_frequency > 0) {
+    run_stage("geodesic_physics", stages::run_geodesic_physics_stage);
+  } else {
+    run_stage("analytical_erosion", stages::run_analytical_erosion_stage);
+    run_stage("hydrology", stages::run_hydrology_stage);
+    run_stage("masks", stages::run_masks_stage);
+  }
   return dataset;
 }
 
@@ -83,7 +88,7 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
   std::ostringstream oss;
   oss << params.seed << '|';
   oss << params.width << 'x' << params.height << '|';
-  oss << params.radius_m << '|';
+  oss << params.radius_m << ',' << params.physics_grid_frequency << '|';
   oss << params.noise.base_frequency << ',' << params.noise.octaves << ','
       << params.noise.lacunarity << ',' << params.noise.gain << ','
       << params.noise.amplitude_m << '|';

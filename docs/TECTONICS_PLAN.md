@@ -1,7 +1,8 @@
 # Tectonic Terrain Generation — Rebuild Plan
 
-Status: proposed (2026-07-17). Supersedes the abandoned per-cell tectonics experiment
-(uncommitted working-tree changes to `tectonics_stage.cpp` and friends).
+Status: IMPLEMENTED (2026-07-17) - milestones M0-M6 landed on main; the failed
+Eulerian experiment is archived on branch `experiment/tectonics-eulerian`.
+See WORKLOG.md for the milestone summary and measurements.
 
 ## 1. Post-mortem of the failed experiment
 

@@ -167,3 +167,12 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   test_tectonics (drift, conservation, age-depth correlation gates).
 - Reference outputs in `output_reference/` (gitignored); metrics.txt captures
   layer hashes for regression comparison.
+- M6: dense physics (erosion/hydrology/masks) on the geodesic grid
+  (`--phys-freq`, F rounded to F0*2^(levels-1)); MFD accumulation; jittered
+  spherical multigrid prolongation. Parity vs raster path at matched
+  resolution: ocean fraction 68.5% vs 68.0%, hypsometric percentiles within
+  ~15% on land / ~0.3% in the ocean; no pentagon or sector-boundary
+  artifacts. Full scale F=704 (4.96M cells): 4.5 s for the whole physics
+  block (vs 8.5 s raster) - the lat-lon raster is now export-only in this
+  mode. Gate test: test_geodesic_physics (layers, water coverage, rivers,
+  determinism).

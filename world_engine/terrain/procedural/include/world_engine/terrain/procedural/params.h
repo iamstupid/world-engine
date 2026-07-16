@@ -99,6 +99,10 @@ struct PipelineParams {
   int width = 4096;
   int height = 2048;
   double radius_m = 6'371'000.0;
+  // > 0: run erosion/hydrology/masks on a dense geodesic grid of this
+  // frequency (rounded to F0 * 2^(multigrid_levels-1)); 0: lat-lon raster
+  // path. The lat-lon raster remains the export/preview format either way.
+  int physics_grid_frequency = 0;
 
   NoiseParams noise{};
   TectonicsParams tectonics{};

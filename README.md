@@ -35,7 +35,7 @@ Preview world:
 Full 4096x2048 smoke run:
 
 ```bash
-./build/tools/terrain_cli/Release/terrain_cli.exe --seed 123 --width 4096 --height 2048 --erosion-iters 1 --erosion-levels 1 --out output_4k
+./build/tools/terrain_cli/Release/terrain_cli.exe --seed 123 --width 4096 --height 2048 --tect-freq 250 --phys-freq 704 --out output_4k
 ```
 
 CLI outputs:

@@ -6,6 +6,7 @@ add_library(world_engine_terrain_procedural
   src/stages/noise_stage.cpp
   src/stages/tectonics_stage.cpp
   src/stages/analytical_erosion_stage.cpp
+  src/stages/geodesic_physics_stage.cpp
   src/stages/hydrology_stage.cpp
   src/stages/masks_stage.cpp
 )

@@ -148,6 +148,21 @@ Source:
 4. Optimization-based discontinuity correction (paper 5.3) is not
    implemented; multigrid + EMA handle basin-boundary discontinuities.
 
+### 4.3 Geodesic dense-physics path (M6)
+
+With `physics_grid_frequency > 0` the erosion solver, hydrology and water
+masks run on a dense icosahedral geodesic grid instead of the lat-lon raster
+(`geodesic_physics_stage`). The receiver-graph algorithms transfer directly:
+5/6-neighbor cell graph, great-circle edge lengths, exact cell areas; the
+multigrid hierarchy uses the F/2 -> F frequency nesting and jittered
+spherical prolongation; hydrology uses multiple-flow-direction accumulation
+(slope-proportional over all lower neighbors). Inputs are sampled from the
+raster layers bilinearly; results are rasterized back through locate().
+This removes the polar singularity and cos(lat) anisotropy entirely; parity
+with the raster path at matched resolution is within a few percent on ocean
+fraction and hypsometric percentiles (rivers render slightly wider due to
+MFD). Gate test: tests/test_geodesic_physics.cpp.
+
 ## 5. Hydrology, Rivers, Lakes, Ocean Masks
 
 Primary source:
