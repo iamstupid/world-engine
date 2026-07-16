@@ -18,7 +18,8 @@ int main() {
 
   const std::vector<std::string> required = {
       "elevation_primeval_m", "tectonic_elevation_m", "elevation_base_m", "elevation_eroded_m",
-      "uplift_rate_m_per_yr", "flow_accumulation_m2", "river_mask", "ocean_mask", "lake_mask"};
+      "uplift_rate_m_per_yr", "crust_type", "flow_accumulation_m2", "river_mask", "ocean_mask",
+      "lake_mask"};
 
   for (const auto& name : required) {
     if (!ds.has_layer(name)) {

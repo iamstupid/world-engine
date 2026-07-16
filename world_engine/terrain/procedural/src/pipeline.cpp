@@ -87,10 +87,19 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
   oss << params.noise.base_frequency << ',' << params.noise.octaves << ','
       << params.noise.lacunarity << ',' << params.noise.gain << ','
       << params.noise.amplitude_m << '|';
-  oss << params.tectonics.plate_count << ',' << params.tectonics.simulation_steps << ','
-      << params.tectonics.dt_myr << ',' << params.tectonics.boundary_width_px
-      << ',' << params.tectonics.uplift_scale_m << ',' << params.tectonics.ridge_scale_m
-      << ',' << params.tectonics.tectonic_mix
+  const auto& tp = params.tectonics;
+  oss << tp.grid_frequency << ',' << tp.plate_count << ',' << tp.simulation_steps << ','
+      << tp.dt_myr << ',' << tp.resample_interval_steps << ','
+      << tp.continent_ratio << ',' << tp.continent_noise_freq << ','
+      << tp.continental_base_m << ',' << tp.oceanic_base_m << ','
+      << tp.ridge_crest_m << ',' << tp.abyssal_m << ',' << tp.trench_depth_m << ','
+      << tp.max_continental_m << ',' << tp.max_plate_speed_mm_yr << ','
+      << tp.min_plate_speed_frac << ',' << tp.subduction_uplift_mm_yr << ','
+      << tp.subduction_distance_km << ',' << tp.collision_coeff_per_km << ','
+      << tp.collision_distance_km << ',' << tp.collision_interpen_km << ','
+      << tp.rift_events_per_100myr << ',' << tp.continental_erosion_mm_yr << ','
+      << tp.oceanic_dampening_mm_yr << ',' << tp.sediment_accretion_mm_yr << ','
+      << tp.uplift_window_myr << ',' << tp.noise_detail_mix
       << '|';
   oss << params.erosion.fixed_point_iterations << ',' << params.erosion.multigrid_levels
       << ',' << params.erosion.k << ',' << params.erosion.m << ','

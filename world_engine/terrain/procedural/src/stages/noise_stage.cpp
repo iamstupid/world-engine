@@ -6,41 +6,17 @@
 #include "FastNoiseLite.h"
 
 namespace world_engine::terrain::procedural::stages {
-namespace {
-
-// Asymmetric hypsometric curve inspired by real Earth elevation distribution:
-// - Ocean floor: mostly flat around -3 to -5 km (abyssal plains)
-// - Continental shelf: 0 to -200m
-// - Continental lowlands: 0 to 500m (largest land area)
-// - Mountains: rare peaks up to 3-5km
-// Input v in [-1, 1], output remapped asymmetrically
-float hypsometric_curve(float v) {
-  v = std::clamp(v, -1.0f, 1.0f);
-  if (v < 0.0f) {
-    // Ocean: power curve with exponent < 1 flattens the deep ocean
-    // while keeping the continental shelf steep
-    const float t = -v;  // 0..1
-    return -std::pow(t, 0.55f);
-  } else {
-    // Land: power curve with exponent > 1 concentrates most area
-    // near sea level while allowing tall mountain peaks
-    const float t = v;  // 0..1
-    return std::pow(t, 1.5f);  // power 1.5: lowland-dominated but allows tall peaks
-  }
-}
-
-}  // namespace
 
 void run_noise_stage(const PipelineParams& params, TerrainDataset& dataset) {
   if (!dataset.has_layer("elevation_primeval_m")) {
     dataset.create_float_layer("elevation_primeval_m", "m",
-                               "Primeval spherical FastNoiseLite OpenSimplex2 fractal elevation");
+                               "Detail noise layer (added to tectonic elevation)");
   }
 
   auto& out = dataset.float_layer("elevation_primeval_m");
   const auto& domain = dataset.domain();
 
-  // Main terrain noise
+  // Main terrain detail noise
   FastNoiseLite noise(params.seed);
   noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
   noise.SetFractalType(FastNoiseLite::FractalType_FBm);
@@ -49,7 +25,7 @@ void run_noise_stage(const PipelineParams& params, TerrainDataset& dataset) {
   noise.SetFractalGain(static_cast<float>(params.noise.gain));
   noise.SetFrequency(static_cast<float>(params.noise.base_frequency));
 
-  // Domain warp noise for breaking symmetry and creating organic shapes
+  // Domain warp noise for organic shapes
   FastNoiseLite warp(params.seed + 7919);
   warp.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
   warp.SetFractalType(FastNoiseLite::FractalType_FBm);
@@ -58,7 +34,7 @@ void run_noise_stage(const PipelineParams& params, TerrainDataset& dataset) {
   warp.SetFractalGain(0.5f);
   warp.SetFrequency(static_cast<float>(params.noise.base_frequency * 0.5));
 
-  // Continent-scale noise (very low frequency) for large landmass shapes
+  // Continent-scale noise for large detail structures
   FastNoiseLite continent_noise(params.seed + 4217);
   continent_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
   continent_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
@@ -89,36 +65,38 @@ void run_noise_stage(const PipelineParams& params, TerrainDataset& dataset) {
       const float py = static_cast<float>(p.y);
       const float pz = static_cast<float>(p.z);
 
-      // Domain warping: offset the sample position for organic coastlines
+      // Domain warping for organic shapes
       const float wx = warp.GetNoise(px * 1.5f, py * 1.5f, pz * 1.5f) * warp_strength;
-      const float wy = warp.GetNoise(px * 1.5f + 100.0f, py * 1.5f + 100.0f, pz * 1.5f + 100.0f) * warp_strength;
-      const float wz = warp.GetNoise(px * 1.5f + 200.0f, py * 1.5f + 200.0f, pz * 1.5f + 200.0f) * warp_strength;
+      const float wy =
+          warp.GetNoise(px * 1.5f + 100.0f, py * 1.5f + 100.0f, pz * 1.5f + 100.0f) *
+          warp_strength;
+      const float wz =
+          warp.GetNoise(px * 1.5f + 200.0f, py * 1.5f + 200.0f, pz * 1.5f + 200.0f) *
+          warp_strength;
 
       const float wpx = px + wx;
       const float wpy = py + wy;
       const float wpz = pz + wz;
 
-      // Main terrain value (warped)
+      // Main terrain detail
       const float n_main = noise.GetNoise(wpx, wpy, wpz);
 
-      // Continent-scale value for large structures
+      // Continent-scale detail
       const float n_continent = continent_noise.GetNoise(px, py, pz);
 
-      // Ridged noise for mountain detail (only on elevated areas)
+      // Ridged detail (masked by elevation)
       const float n_ridge = ridge_noise.GetNoise(wpx, wpy, wpz);
 
-      // Blend: continent shape + terrain detail + ridge detail on peaks
+      // Blend layers
       float combined = n_continent * 0.45f + n_main * 0.40f;
       const float ridge_mask = std::clamp(combined * 2.0f, 0.0f, 1.0f);
       combined += n_ridge * 0.15f * ridge_mask;
 
-      // Apply hypsometric curve for realistic elevation distribution
-      const float shaped = hypsometric_curve(combined);
+      // Mild signed power shaping (no hypsometric curve, no ocean bias)
+      const float sign = (combined >= 0.0f) ? 1.0f : -1.0f;
+      const float shaped = sign * std::pow(std::abs(combined), 0.85f);
 
-      // Ocean bias: shift distribution so ~60% is below sea level.
-      // The quadratic land curve already compresses land, so mild bias suffices.
-      const float ocean_bias = -0.08f;
-      out[idx] = (shaped + ocean_bias) * amp;
+      out[idx] = shaped * amp;
     }
   }
 }

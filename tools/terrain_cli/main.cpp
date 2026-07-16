@@ -362,11 +362,17 @@ int main(int argc, char** argv) {
     } else if (a == "--river-threshold" && i + 1 < argc) {
       params.hydrology.river_area_threshold_m2 = std::stof(argv[++i]);
     } else if (a == "--tect-steps" && i + 1 < argc) {
-      params.tectonics.simulation_steps = std::max(1, std::stoi(argv[++i]));
+      params.tectonics.simulation_steps = std::max(0, std::stoi(argv[++i]));
     } else if (a == "--tect-dt-myr" && i + 1 < argc) {
       params.tectonics.dt_myr = std::max(0.01, std::stod(argv[++i]));
-    } else if (a == "--tect-mix" && i + 1 < argc) {
-      params.tectonics.tectonic_mix = std::clamp(std::stod(argv[++i]), 0.0, 1.0);
+    } else if (a == "--tect-freq" && i + 1 < argc) {
+      params.tectonics.grid_frequency = std::max(4, std::stoi(argv[++i]));
+    } else if (a == "--plates" && i + 1 < argc) {
+      params.tectonics.plate_count = std::max(2, std::stoi(argv[++i]));
+    } else if (a == "--continent-ratio" && i + 1 < argc) {
+      params.tectonics.continent_ratio = std::clamp(std::stod(argv[++i]), 0.05, 0.95);
+    } else if (a == "--noise-mix" && i + 1 < argc) {
+      params.tectonics.noise_detail_mix = std::clamp(std::stod(argv[++i]), 0.0, 1.0);
     } else if (a == "--write-pgm") {
       also_write_pgm = true;
     }

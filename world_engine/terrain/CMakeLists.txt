@@ -1,6 +1,7 @@
 add_library(world_engine_terrain
   src/terrain_domain.cpp
   src/terrain_dataset.cpp
+  src/geodesic_grid.cpp
 )
 
 target_include_directories(world_engine_terrain

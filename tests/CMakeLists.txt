@@ -4,6 +4,18 @@ add_executable(test_domain
 target_link_libraries(test_domain PRIVATE world_engine_terrain)
 add_test(NAME test_domain COMMAND test_domain)
 
+add_executable(test_geodesic
+  test_geodesic.cpp
+)
+target_link_libraries(test_geodesic PRIVATE world_engine_terrain)
+add_test(NAME test_geodesic COMMAND test_geodesic)
+
+add_executable(test_tectonics
+  test_tectonics.cpp
+)
+target_link_libraries(test_tectonics PRIVATE world_engine_terrain_procedural)
+add_test(NAME test_tectonics COMMAND test_tectonics)
+
 add_executable(test_determinism
   test_determinism.cpp
 )

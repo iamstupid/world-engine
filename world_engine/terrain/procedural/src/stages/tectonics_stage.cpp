@@ -1,355 +1,475 @@
 #include "world_engine/terrain/procedural/stages/tectonics_stage.h"
 
+// Lagrangian plate tectonics after Cortial et al. 2019, "Procedural Tectonic
+// Planets" (docs/references/2019-Procedural-Tectonic-Planets.pdf).
+//
+// Crust state lives on the cells of a canonical icosahedral geodesic grid
+// (GeodesicGrid). Plates are sets of cells carried by rigid rotations: between
+// global resamplings, the crust sampled at canonical cell i of plate p is
+// physically located at delta_R_p * center(i). Every resample_interval_steps
+// the crust is re-projected onto the canonical grid (paper Section 6):
+// overlaps consume the subducting side, gaps become fresh oceanic crust at
+// the ridge (Section 4.3).
+//
+// Source anchors used below:
+//   Section 3   plate motion s(p) = omega (w x p); crust attributes (Table 1)
+//   Section 4.1 subduction uplift u_e = u0 * f(d) * g(v) * h(z~)
+//   Section 4.3 oceanic crust generation, alpha-blended ridge profile
+//   Section 4.5 continental erosion, oceanic dampening, trench sediments
+//   Section 6   Fibonacci plate seeds, global resampling
+//   Appendix A  reference constants
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
 
+#include "FastNoiseLite.h"
+#include "world_engine/terrain/geodesic_grid.h"
+
 namespace world_engine::terrain::procedural::stages {
 namespace {
-// Source: 2019-Procedural-Tectonic-Planets.pdf, Section 4, model paragraph.
-// Surface speed relation: s(p) = omega * (w x p).
-// Source: 2019-Procedural-Tectonic-Planets.pdf, Section 6.
-// Initial near-uniform plate seeds use Fibonacci sphere sampling.
 
-struct V3 {
-  double x = 0.0;
-  double y = 0.0;
-  double z = 0.0;
+constexpr double kPi = 3.14159265358979323846;
+
+// ---------------------------------------------------------------- math ----
+
+struct Mat3 {
+  double m[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 };
 
-V3 cross(const V3& a, const V3& b) {
-  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+// R^T p (inverse of a rotation).
+Vec3d apply_inv(const Mat3& r, const Vec3d& p) {
+  return {r.m[0] * p.x + r.m[3] * p.y + r.m[6] * p.z,
+          r.m[1] * p.x + r.m[4] * p.y + r.m[7] * p.z,
+          r.m[2] * p.x + r.m[5] * p.y + r.m[8] * p.z};
 }
 
-double dot(const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-
-double norm(const V3& v) { return std::sqrt(dot(v, v)); }
-
-V3 normalize(const V3& v) {
-  const double n = norm(v);
-  if (n <= 1e-12) {
-    return {0.0, 1.0, 0.0};
-  }
-  return {v.x / n, v.y / n, v.z / n};
-}
-
-V3 sub(const V3& a, const V3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-V3 add(const V3& a, const V3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-V3 mul(const V3& v, double s) { return {v.x * s, v.y * s, v.z * s}; }
-
-V3 rotate_axis_angle(const V3& v, const V3& axis_unit, double angle) {
+Mat3 axis_angle(const Vec3d& axis, double angle) {
   const double c = std::cos(angle);
   const double s = std::sin(angle);
-  const V3 term1 = mul(v, c);
-  const V3 term2 = mul(cross(axis_unit, v), s);
-  const V3 term3 = mul(axis_unit, dot(axis_unit, v) * (1.0 - c));
-  return add(add(term1, term2), term3);
+  const double t = 1.0 - c;
+  const double x = axis.x;
+  const double y = axis.y;
+  const double z = axis.z;
+  Mat3 r;
+  r.m[0] = t * x * x + c;
+  r.m[1] = t * x * y - s * z;
+  r.m[2] = t * x * z + s * y;
+  r.m[3] = t * x * y + s * z;
+  r.m[4] = t * y * y + c;
+  r.m[5] = t * y * z - s * x;
+  r.m[6] = t * x * z - s * y;
+  r.m[7] = t * y * z + s * x;
+  r.m[8] = t * z * z + c;
+  return r;
 }
 
-uint64_t splitmix64(uint64_t x) {
-  x += 0x9e3779b97f4a7c15ULL;
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-  x ^= (x >> 31);
-  return x;
+double dot(const Vec3d& a, const Vec3d& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+// Deterministic splitmix64-style hash -> [0, 1).
+double unit_rand(uint64_t key) {
+  key += 0x9E3779B97F4A7C15ULL;
+  key = (key ^ (key >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  key = (key ^ (key >> 27)) * 0x94D049BB133111EBULL;
+  key = key ^ (key >> 31);
+  return static_cast<double>(key >> 11) / 9007199254740992.0;
 }
 
-double unit_rand01(uint64_t key) {
-  const uint64_t h = splitmix64(key);
-  return static_cast<double>((h >> 11) & ((1ULL << 53) - 1)) *
-         (1.0 / static_cast<double>(1ULL << 53));
+Vec3d random_unit_vec(uint64_t key) {
+  const double z = 2.0 * unit_rand(key) - 1.0;
+  const double phi = 2.0 * kPi * unit_rand(key + 0x51ULL);
+  const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+  return {r * std::cos(phi), r * std::sin(phi), z};
 }
 
-std::vector<V3> fibonacci_sphere_points(int n) {
-  std::vector<V3> pts;
+// Fibonacci sphere sampling (paper Section 6) for plate seeds.
+std::vector<Vec3d> fibonacci_sphere(int n) {
+  std::vector<Vec3d> pts;
   pts.reserve(n);
-  constexpr double kPi = 3.14159265358979323846;
-  const double phi = (1.0 + std::sqrt(5.0)) * 0.5;
+  const double golden = (1.0 + std::sqrt(5.0)) * 0.5;
   for (int i = 0; i < n; ++i) {
     const double u = (i + 0.5) / static_cast<double>(n);
-    const double y = 1.0 - 2.0 * u;
-    const double r = std::sqrt(std::max(0.0, 1.0 - y * y));
-    const double theta = 2.0 * kPi * i / phi;
-    pts.push_back({std::cos(theta) * r, y, std::sin(theta) * r});
+    const double z = 1.0 - 2.0 * u;
+    const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
+    const double phi = 2.0 * kPi * static_cast<double>(i) / golden;
+    pts.push_back({r * std::cos(phi), r * std::sin(phi), z});
   }
   return pts;
 }
 
-int north_neighbor(const TerrainDomain& domain, int x, int y) {
-  if (y > 0) {
-    return domain.index(x, y - 1);
-  }
-  return domain.index(x + domain.width() / 2, 1);
-}
+// -------------------------------------------------------------- plates ----
 
-int south_neighbor(const TerrainDomain& domain, int x, int y) {
-  if (y < domain.height() - 1) {
-    return domain.index(x, y + 1);
-  }
-  return domain.index(x + domain.width() / 2, domain.height() - 2);
-}
+struct Plate {
+  Vec3d axis{0.0, 0.0, 1.0};      // rotation axis w (unit)
+  double omega_rad_myr = 0.0;     // angular speed
+  Mat3 delta;                     // rotation accumulated since last resample
+};
 
-void blur_scalar_field(const TerrainDomain& domain, std::vector<float>& field, int passes) {
-  std::vector<float> tmp(field.size(), 0.0f);
-  for (int pass = 0; pass < passes; ++pass) {
-    for (int y = 0; y < domain.height(); ++y) {
-      for (int x = 0; x < domain.width(); ++x) {
-        const int c = domain.index(x, y);
-        const int l = domain.index(x - 1, y);
-        const int r = domain.index(x + 1, y);
-        const int u = north_neighbor(domain, x, y);
-        const int d = south_neighbor(domain, x, y);
-        tmp[c] = (field[c] * 2.0f + field[l] + field[r] + field[u] + field[d]) / 6.0f;
-      }
+// Crust state on the canonical geodesic cells (paper Table 1).
+struct Crust {
+  std::vector<int32_t> plate;
+  std::vector<uint8_t> type;          // 0 = oceanic, 1 = continental
+  std::vector<float> elevation_m;
+  std::vector<float> age_myr;         // oceanic crust age
+  std::vector<uint8_t> orogeny_type;  // 0 none, 1 Andean, 2 Himalayan
+  std::vector<float> orogeny_age_myr;
+  std::vector<float> uplift_window_m; // uplift accumulated in trailing window
+
+  void resize(int n) {
+    plate.assign(n, 0);
+    type.assign(n, 0);
+    elevation_m.assign(n, 0.0f);
+    age_myr.assign(n, 0.0f);
+    orogeny_type.assign(n, 0);
+    orogeny_age_myr.assign(n, 0.0f);
+    uplift_window_m.assign(n, 0.0f);
+  }
+};
+
+// Result of asking "which crust is physically at direction p right now?"
+struct CrustSample {
+  bool found = false;
+  double coverage = 0.0;  // interpolation weight owned by the winning plate
+  int plate = -1;
+  int nearest_cell = -1;  // cell of the winning plate with max weight
+  double elevation_m = 0.0;
+  double age_myr = 0.0;
+  double uplift_window_m = 0.0;
+  double orogeny_age_myr = 0.0;
+  uint8_t type = 0;
+  uint8_t orogeny_type = 0;
+};
+
+// Query the crust of a single plate at direction p (world frame): inverse
+// rotate into the plate's resample frame and interpolate over cells that the
+// plate owns. Returns coverage 0 if the plate has no crust there.
+CrustSample sample_plate(const GeodesicGrid& grid, const Crust& crust,
+                         const std::vector<Plate>& plates, int plate_id,
+                         const Vec3d& p) {
+  const Vec3d q = apply_inv(plates[plate_id].delta, p);
+  const auto lk = grid.locate(q);
+  CrustSample out;
+  double cov = 0.0;
+  double elev = 0.0;
+  double age = 0.0;
+  double uplift = 0.0;
+  double oro_age = 0.0;
+  double cont_w = 0.0;
+  double best_w = 0.0;
+  int best_cell = -1;
+  for (int k = 0; k < 3; ++k) {
+    const int cell = lk.cell[k];
+    const double wgt = lk.weight[k];
+    if (crust.plate[cell] != plate_id) {
+      continue;
     }
-    field.swap(tmp);
-  }
-}
-
-std::vector<float> upsample_bilinear(const std::vector<float>& src, int sw, int sh, int dw, int dh) {
-  std::vector<float> out(dw * dh, 0.0f);
-  for (int y = 0; y < dh; ++y) {
-    const float v = (static_cast<float>(y) + 0.5f) * static_cast<float>(sh) / static_cast<float>(dh) - 0.5f;
-    const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, sh - 1);
-    const int y1 = std::clamp(y0 + 1, 0, sh - 1);
-    const float ty = std::clamp(v - static_cast<float>(y0), 0.0f, 1.0f);
-    for (int x = 0; x < dw; ++x) {
-      const float u = (static_cast<float>(x) + 0.5f) * static_cast<float>(sw) / static_cast<float>(dw) - 0.5f;
-      int x0 = static_cast<int>(std::floor(u));
-      int x1 = x0 + 1;
-      const float tx = std::clamp(u - static_cast<float>(x0), 0.0f, 1.0f);
-      x0 = (x0 % sw + sw) % sw;
-      x1 = (x1 % sw + sw) % sw;
-
-      const float c00 = src[y0 * sw + x0];
-      const float c10 = src[y0 * sw + x1];
-      const float c01 = src[y1 * sw + x0];
-      const float c11 = src[y1 * sw + x1];
-      const float c0 = c00 + (c10 - c00) * tx;
-      const float c1 = c01 + (c11 - c01) * tx;
-      out[y * dw + x] = c0 + (c1 - c0) * ty;
+    cov += wgt;
+    elev += wgt * crust.elevation_m[cell];
+    age += wgt * crust.age_myr[cell];
+    uplift += wgt * crust.uplift_window_m[cell];
+    oro_age += wgt * crust.orogeny_age_myr[cell];
+    if (crust.type[cell] == 1) {
+      cont_w += wgt;
+    }
+    if (wgt > best_w) {
+      best_w = wgt;
+      best_cell = cell;
     }
   }
+  if (cov <= 1e-9) {
+    return out;
+  }
+  out.found = true;
+  out.coverage = cov;
+  out.plate = plate_id;
+  out.nearest_cell = best_cell;
+  out.elevation_m = elev / cov;
+  out.age_myr = age / cov;
+  out.uplift_window_m = uplift / cov;
+  out.orogeny_age_myr = oro_age / cov;
+  out.type = (cont_w > 0.5 * cov) ? 1 : 0;
+  out.orogeny_type = (best_cell >= 0) ? crust.orogeny_type[best_cell] : 0;
   return out;
 }
 
-std::vector<int32_t> upsample_nearest_i32(const std::vector<int32_t>& src, int sw, int sh, int dw, int dh) {
-  std::vector<int32_t> out(dw * dh, 0);
-  for (int y = 0; y < dh; ++y) {
-    int sy = static_cast<int>((static_cast<double>(y) + 0.5) * static_cast<double>(sh) /
-                              static_cast<double>(dh));
-    sy = std::clamp(sy, 0, sh - 1);
-    for (int x = 0; x < dw; ++x) {
-      int sx = static_cast<int>((static_cast<double>(x) + 0.5) * static_cast<double>(sw) /
-                                static_cast<double>(dw));
-      sx = (sx % sw + sw) % sw;
-      out[y * dw + x] = src[sy * sw + sx];
+// Ownership arbitration at a point covered by several plates (or none).
+// Continental crust always overrides oceanic crust (continental material is
+// buoyant and does not subduct — paper Section 4.1); within the same crust
+// class the higher interpolation coverage wins. M2 adds subduction uplift and
+// ridge generation on top of this rule.
+CrustSample sample_world(const GeodesicGrid& grid, const Crust& crust,
+                         const std::vector<Plate>& plates, const Vec3d& p) {
+  CrustSample best;
+  double best_score = -1.0;
+  for (int pl = 0; pl < static_cast<int>(plates.size()); ++pl) {
+    const CrustSample s = sample_plate(grid, crust, plates, pl, p);
+    if (!s.found) {
+      continue;
+    }
+    const double score = s.coverage + (s.type == 1 ? 10.0 : 0.0);
+    if (score > best_score) {
+      best_score = score;
+      best = s;
     }
   }
-  return out;
+  return best;
 }
+
 }  // namespace
 
 void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) {
   const auto& domain = dataset.domain();
-  const int n = dataset.size();
+  const auto& tp = params.tectonics;
 
+  // Output layers (raster contract unchanged from the previous pipeline).
   if (!dataset.has_layer("plate_id")) {
     dataset.create_i32_layer("plate_id", "id", "Tectonic plate assignment");
   }
   if (!dataset.has_layer("tectonic_elevation_m")) {
     dataset.create_float_layer("tectonic_elevation_m", "m",
-                               "Large-scale tectonic elevation contribution");
+                               "Crust elevation from Lagrangian plate simulation");
   }
   if (!dataset.has_layer("uplift_rate_m_per_yr")) {
     dataset.create_float_layer("uplift_rate_m_per_yr", "m/yr",
-                               "Tectonic uplift rate used by analytical erosion");
+                               "Recent tectonic uplift rate for analytical erosion");
+  }
+  if (!dataset.has_layer("crust_type")) {
+    dataset.create_u8_layer("crust_type", "", "Crust type: 0=oceanic, 1=continental");
+  }
+  if (!dataset.has_layer("oceanic_age_myr")) {
+    dataset.create_float_layer("oceanic_age_myr", "My", "Oceanic crust age");
   }
 
-  auto& plate_id = dataset.i32_layer("plate_id");
-  auto& tectonic = dataset.float_layer("tectonic_elevation_m");
-  auto& uplift = dataset.float_layer("uplift_rate_m_per_yr");
+  const GeodesicGrid grid(std::max(4, tp.grid_frequency));
+  const int n_cells = grid.cell_count();
+  const double radius_km = domain.radius_m() / 1000.0;
+  // v0 in mm/yr equals km/My; omega_max = v0 / R.
+  const double omega_max_rad_myr = tp.max_plate_speed_mm_yr / radius_km;
+  const uint64_t seed = static_cast<uint64_t>(static_cast<uint32_t>(params.seed));
 
-  const int plate_count = std::max(2, params.tectonics.plate_count);
-  const auto seeds0 = fibonacci_sphere_points(plate_count);
-
-  std::vector<V3> ang_vel(plate_count);
-  std::vector<V3> warp_dir1(plate_count);
-  std::vector<V3> warp_dir2(plate_count);
-  std::vector<double> phase1(plate_count, 0.0);
-  std::vector<double> phase2(plate_count, 0.0);
+  // ---- Plate initialization: Fibonacci seeds + warped Voronoi partition ----
+  const int plate_count = std::max(2, tp.plate_count);
+  const auto seeds = fibonacci_sphere(plate_count);
+  std::vector<Plate> plates(plate_count);
+  std::vector<Vec3d> warp_dir1(plate_count);
+  std::vector<Vec3d> warp_dir2(plate_count);
+  std::vector<double> phase1(plate_count);
+  std::vector<double> phase2(plate_count);
   for (int p = 0; p < plate_count; ++p) {
-    const uint64_t k0 = static_cast<uint64_t>(params.seed) * 1315423911ULL +
-                        static_cast<uint64_t>(p) * 2654435761ULL;
-    const double u1 = unit_rand01(k0 + 1);
-    const double u2 = unit_rand01(k0 + 2);
-    const double u3 = unit_rand01(k0 + 3);
-    const double z = 2.0 * u1 - 1.0;
-    const double r = std::sqrt(std::max(0.0, 1.0 - z * z));
-    const double theta = 2.0 * 3.14159265358979323846 * u2;
-    const V3 axis = normalize(V3{r * std::cos(theta), z, r * std::sin(theta)});
-    const double omega = 0.25 + 0.75 * u3;
-    ang_vel[p] = mul(axis, omega);
-
-    const auto rand_dir = [&](uint64_t k) -> V3 {
-      const double a1 = unit_rand01(k + 10);
-      const double a2 = unit_rand01(k + 11);
-      const double zz = 2.0 * a1 - 1.0;
-      const double rr = std::sqrt(std::max(0.0, 1.0 - zz * zz));
-      const double tt = 2.0 * 3.14159265358979323846 * a2;
-      return {rr * std::cos(tt), zz, rr * std::sin(tt)};
-    };
-    warp_dir1[p] = rand_dir(k0 + 21);
-    warp_dir2[p] = rand_dir(k0 + 37);
-    phase1[p] = unit_rand01(k0 + 51) * 6.283185307179586;
-    phase2[p] = unit_rand01(k0 + 63) * 6.283185307179586;
+    const uint64_t k0 = seed * 1315423911ULL + static_cast<uint64_t>(p) * 2654435761ULL;
+    plates[p].axis = random_unit_vec(k0);
+    const double frac = tp.min_plate_speed_frac +
+                        (1.0 - tp.min_plate_speed_frac) * unit_rand(k0 + 7);
+    plates[p].omega_rad_myr = frac * omega_max_rad_myr;
+    warp_dir1[p] = random_unit_vec(k0 + 21);
+    warp_dir2[p] = random_unit_vec(k0 + 37);
+    phase1[p] = unit_rand(k0 + 51) * 2.0 * kPi;
+    phase2[p] = unit_rand(k0 + 63) * 2.0 * kPi;
   }
 
-  const int cw = std::min(domain.width(), 1024);
-  const int ch = std::min(domain.height(), 512);
-  const TerrainDomain cdom(cw, ch, domain.radius_m());
-  const int cn = cw * ch;
-  std::vector<V3> cpos(cn);
-  for (int y = 0; y < ch; ++y) {
-    for (int x = 0; x < cw; ++x) {
-      const int i = y * cw + x;
-      const auto ll = cdom.center_lat_lon_deg(x, y);
-      const auto p = cdom.lat_lon_to_xyz(ll);
-      cpos[i] = {p.x, p.y, p.z};
-    }
-  }
+  const auto plate_score = [&](int p, const Vec3d& c) {
+    const double warp = 0.05 * std::sin(9.0 * dot(c, warp_dir1[p]) + phase1[p]) +
+                        0.03 * std::sin(17.0 * dot(c, warp_dir2[p]) + phase2[p]);
+    return dot(c, seeds[p]) + warp;
+  };
 
-  const double total_myr = std::max(1.0, static_cast<double>(params.tectonics.simulation_steps) *
-                                              params.tectonics.dt_myr);
-  const int sample_count =
-      std::clamp(static_cast<int>(std::round(total_myr / 12.5)), 6, 24);  // 250 My -> 20 samples.
-  const double angle_per_myr = 0.006;  // tuned to avoid unrealistic full-turn drift.
+  // ---- Crust initialization on canonical cells ----
+  Crust crust;
+  crust.resize(n_cells);
 
-  std::vector<float> interaction(cn, 0.0f);
-  std::vector<int32_t> plate_coarse(cn, 0);
-  std::vector<V3> moved_seed(plate_count);
+  FastNoiseLite continent_noise(params.seed + 9973);
+  continent_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+  continent_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+  continent_noise.SetFractalOctaves(4);
+  continent_noise.SetFractalLacunarity(2.0f);
+  continent_noise.SetFractalGain(0.5f);
+  continent_noise.SetFrequency(static_cast<float>(tp.continent_noise_freq));
 
-  for (int s = 0; s < sample_count; ++s) {
-    const double t_myr =
-        (sample_count == 1) ? 0.0 : (static_cast<double>(s) / static_cast<double>(sample_count - 1)) * total_myr;
-
+  std::vector<float> cont_noise(n_cells);
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n_cells; ++i) {
+    const Vec3d& c = grid.cell_center(i);
+    cont_noise[i] = continent_noise.GetNoise(static_cast<float>(c.x),
+                                             static_cast<float>(c.y),
+                                             static_cast<float>(c.z));
+    int best = 0;
+    double best_score = -1e30;
     for (int p = 0; p < plate_count; ++p) {
-      const V3 axis = normalize(ang_vel[p]);
-      const double omega = norm(ang_vel[p]);
-      const double angle = omega * angle_per_myr * t_myr;
-      moved_seed[p] = rotate_axis_angle(seeds0[p], axis, angle);
+      const double s = plate_score(p, c);
+      if (s > best_score) {
+        best_score = s;
+        best = p;
+      }
     }
+    crust.plate[i] = best;
+  }
 
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < cn; ++i) {
-      const V3 p = cpos[i];
-      int p1 = 0;
-      int p2 = 1;
-      double best = -1e30;
-      double second = -1e30;
+  std::vector<float> sorted_noise = cont_noise;
+  std::sort(sorted_noise.begin(), sorted_noise.end());
+  const int thr_idx = std::clamp(
+      static_cast<int>((1.0 - tp.continent_ratio) * n_cells), 0, n_cells - 1);
+  const float threshold = sorted_noise[thr_idx];
 
-      for (int k = 0; k < plate_count; ++k) {
-        const double base = dot(p, moved_seed[k]);
-        const double warp = 0.05 * std::sin(9.0 * dot(p, warp_dir1[k]) + phase1[k]) +
-                            0.03 * std::sin(17.0 * dot(p, warp_dir2[k]) + phase2[k]);
-        const double score = base + warp;
-        if (score > best) {
-          second = best;
-          p2 = p1;
-          best = score;
-          p1 = k;
-        } else if (score > second) {
-          second = score;
-          p2 = k;
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n_cells; ++i) {
+    const uint64_t key = seed * 7919ULL + static_cast<uint64_t>(i);
+    if (cont_noise[i] > threshold) {
+      crust.type[i] = 1;
+      const double interior = std::min((cont_noise[i] - threshold) * 3.0, 1.0) * 400.0;
+      const double jitter = (unit_rand(key) - 0.5) * 300.0;
+      crust.elevation_m[i] = static_cast<float>(tp.continental_base_m + interior + jitter);
+    } else {
+      crust.type[i] = 0;
+      const double jitter = (unit_rand(key + 1000003ULL) - 0.5) * 300.0;
+      crust.elevation_m[i] = static_cast<float>(tp.oceanic_base_m + jitter);
+      // Young planet: give initial ocean floor a random age so dampening and
+      // ridge renewal (M2) do not act in lockstep.
+      crust.age_myr[i] = static_cast<float>(unit_rand(key + 2000003ULL) * 60.0);
+    }
+  }
+
+  // ---- Simulation loop ----
+  // M1 scope: rigid motion + periodic global resampling. Interactions
+  // (subduction, collision, ridges, rifting) land in M2/M3.
+  const int steps = std::max(0, tp.simulation_steps);
+  const int resample_every = std::max(1, tp.resample_interval_steps);
+
+  const auto global_resample = [&]() {
+    Crust next;
+    next.resize(n_cells);
+    #pragma omp parallel for schedule(dynamic, 256)
+    for (int i = 0; i < n_cells; ++i) {
+      const Vec3d& c = grid.cell_center(i);
+      const CrustSample s = sample_world(grid, crust, plates, c);
+      if (s.found) {
+        next.plate[i] = s.plate;
+        next.type[i] = s.type;
+        next.elevation_m[i] = static_cast<float>(s.elevation_m);
+        next.age_myr[i] = static_cast<float>(s.age_myr);
+        next.orogeny_type[i] = s.orogeny_type;
+        next.orogeny_age_myr[i] = static_cast<float>(s.orogeny_age_myr);
+        next.uplift_window_m[i] = static_cast<float>(s.uplift_window_m);
+      } else {
+        // Gap between diverging plates. M1 placeholder: fresh abyssal ocean
+        // assigned to the nearest plate by warped score; M2 replaces this
+        // with the ridge profile of paper Section 4.3.
+        int best = 0;
+        double best_score = -1e30;
+        for (int p = 0; p < plate_count; ++p) {
+          const double sc = plate_score(p, c);
+          if (sc > best_score) {
+            best_score = sc;
+            best = p;
+          }
+        }
+        next.plate[i] = best;
+        next.type[i] = 0;
+        next.elevation_m[i] = static_cast<float>(tp.abyssal_m);
+        next.age_myr[i] = 0.0f;
+      }
+    }
+    crust = std::move(next);
+    for (Plate& p : plates) {
+      p.delta = Mat3{};
+    }
+  };
+
+  for (int s = 0; s < steps; ++s) {
+    // 1. Advance rigid rotations (paper Section 3).
+    for (Plate& p : plates) {
+      const Mat3 stepR = axis_angle(p.axis, p.omega_rad_myr * tp.dt_myr);
+      Mat3 acc;
+      // acc = stepR * delta
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          acc.m[3 * r + c] = stepR.m[3 * r + 0] * p.delta.m[0 + c] +
+                             stepR.m[3 * r + 1] * p.delta.m[3 + c] +
+                             stepR.m[3 * r + 2] * p.delta.m[6 + c];
         }
       }
+      p.delta = acc;
+    }
 
-      if (s == sample_count - 1) {
-        plate_coarse[i] = p1;
+    // 2. Crust ages advance (paper Table 1).
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n_cells; ++i) {
+      if (crust.type[i] == 0) {
+        crust.age_myr[i] += static_cast<float>(tp.dt_myr);
+      } else if (crust.orogeny_type[i] != 0) {
+        crust.orogeny_age_myr[i] += static_cast<float>(tp.dt_myr);
       }
+    }
 
-      const double gap = best - second;
-      // Sharper boundary detection: higher factor = narrower mountain belts
-      const double boundary = std::exp(-std::max(0.0, gap) * 35.0);
-
-      const V3 v1 = cross(ang_vel[p1], p);
-      const V3 v2 = cross(ang_vel[p2], p);
-      const V3 d = sub(moved_seed[p2], moved_seed[p1]);
-      const V3 tangent = normalize(sub(d, mul(p, dot(d, p))));
-      const double rel = dot(sub(v2, v1), tangent);
-      // Convergent boundaries get strong uplift; divergent get mild rifting
-      const double c = (rel < 0.0) ? (-rel) : (-0.35 * rel);
-      interaction[i] += static_cast<float>(boundary * c);
+    // 3. Global resampling (paper Sections 4.3 / 6).
+    if ((s + 1) % resample_every == 0 && s + 1 < steps) {
+      global_resample();
     }
   }
 
-  for (float& v : interaction) {
-    v /= static_cast<float>(sample_count);
-  }
+  // ---- Rasterize crust to the lat-lon dataset ----
+  auto& plate_layer = dataset.i32_layer("plate_id");
+  auto& tectonic = dataset.float_layer("tectonic_elevation_m");
+  auto& uplift = dataset.float_layer("uplift_rate_m_per_yr");
+  auto& crust_layer = dataset.u8_layer("crust_type");
+  auto& age_layer = dataset.float_layer("oceanic_age_myr");
 
-  // Fewer blur passes for sharper/narrower mountain belts
-  blur_scalar_field(cdom, interaction,
-                    static_cast<int>(std::max(4.0, params.tectonics.boundary_width_px * 2.0)));
+  const int w = domain.width();
+  const int h = domain.height();
+  const double uplift_window_yr = std::max(1.0, tp.uplift_window_myr * 1e6);
 
-  std::vector<float> interaction_full;
-  std::vector<int32_t> plate_full;
-  if (cw == domain.width() && ch == domain.height()) {
-    interaction_full = interaction;
-    plate_full = plate_coarse;
-  } else {
-    interaction_full = upsample_bilinear(interaction, cw, ch, domain.width(), domain.height());
-    plate_full = upsample_nearest_i32(plate_coarse, cw, ch, domain.width(), domain.height());
-  }
-  plate_id = std::move(plate_full);
-
-  float max_abs = 1e-6f;
-  for (float v : interaction_full) {
-    max_abs = std::max(max_abs, std::abs(v));
-  }
-
-  for (int i = 0; i < n; ++i) {
-    // Use a sharper response: signed square root preserves narrow peaks better than tanh
-    const float normed = interaction_full[i] / max_abs;
-    const float sign = (normed >= 0.0f) ? 1.0f : -1.0f;
-    const float shaped = sign * std::sqrt(std::abs(normed));
-    tectonic[i] = shaped * static_cast<float>(params.tectonics.uplift_scale_m);
-  }
-
-  // Reduced blur at full resolution for sharper mountain belts
-  blur_scalar_field(domain, tectonic,
-                    static_cast<int>(std::max(4.0, params.tectonics.boundary_width_px * 3.0)));
-
-  const double total_years = std::max(1.0, total_myr * 1'000'000.0);
-  for (int i = 0; i < n; ++i) {
-    uplift[i] = static_cast<float>(std::max(0.0f, tectonic[i]) / total_years);
+  #pragma omp parallel for schedule(dynamic, 8)
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const int idx = domain.index(x, y);
+      const Vec3d p = domain.lat_lon_to_xyz(domain.center_lat_lon_deg(x, y));
+      const CrustSample s = sample_world(grid, crust, plates, p);
+      if (s.found) {
+        plate_layer[idx] = s.plate;
+        crust_layer[idx] = s.type;
+        tectonic[idx] = static_cast<float>(s.elevation_m);
+        age_layer[idx] = (s.type == 0) ? static_cast<float>(s.age_myr) : 0.0f;
+        uplift[idx] = static_cast<float>(s.uplift_window_m / uplift_window_yr);
+        // Placeholder until M2 accumulates real subduction uplift: keep a
+        // small continental floor so the erosion solver has a nonzero field.
+        if (s.type == 1) {
+          uplift[idx] = std::max(uplift[idx], 1e-4f);
+        }
+      } else {
+        plate_layer[idx] = -1;
+        crust_layer[idx] = 0;
+        tectonic[idx] = static_cast<float>(tp.abyssal_m);
+        age_layer[idx] = 0.0f;
+        uplift[idx] = 0.0f;
+      }
+    }
   }
 }
 
 void run_combine_stage(const PipelineParams& params, TerrainDataset& dataset) {
   if (!dataset.has_layer("elevation_base_m")) {
-    dataset.create_float_layer("elevation_base_m", "m", "Primeval + tectonic base elevation");
+    dataset.create_float_layer("elevation_base_m", "m",
+                               "Tectonic + noise detail base elevation");
   }
 
-  const auto& prime = dataset.float_layer("elevation_primeval_m");
+  const auto& noise = dataset.float_layer("elevation_primeval_m");
   const auto& tectonic = dataset.float_layer("tectonic_elevation_m");
   auto& base = dataset.float_layer("elevation_base_m");
-  const float mix = static_cast<float>(std::clamp(params.tectonics.tectonic_mix, 0.0, 1.0));
+  const float mix = static_cast<float>(std::clamp(params.tectonics.noise_detail_mix, 0.0, 1.0));
   const float sea = params.hydrology.sea_level_m;
 
   for (int i = 0; i < dataset.size(); ++i) {
-    float z = prime[i] + tectonic[i] * mix;
+    // Tectonics drives the large scale; noise adds detail.
+    float z = tectonic[i] + noise[i] * mix;
 
-    // Create continental shelf effect: land near sea level gets a gentle slope
-    // instead of an abrupt transition to deep ocean
+    // Continental shelf morphology (quadratic ramps near sea level).
     if (z > sea && z < sea + 200.0f) {
-      // Coastal lowlands: flatten slightly to create plains
       const float t = (z - sea) / 200.0f;
-      z = sea + t * t * 200.0f;  // quadratic ramp creates coastal plains
+      z = sea + t * t * 200.0f;
     } else if (z < sea && z > sea - 300.0f) {
-      // Continental shelf: gentle slope near coastline
       const float t = (sea - z) / 300.0f;
-      z = sea - t * t * 300.0f;  // shallow shelf break
+      z = sea - t * t * 300.0f;
     }
 
     base[i] = z;
