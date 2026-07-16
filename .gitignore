@@ -5,3 +5,5 @@ test_output/
 *.user
 *.suo
 *.vcxproj.user
+.claude/
+build-linux/

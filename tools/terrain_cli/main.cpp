@@ -179,6 +179,106 @@ bool write_png8_preview(const std::string& path, const std::vector<float>& data,
   return true;
 }
 
+// FNV-1a over raw bytes; stable across platforms for identical float bit patterns.
+uint64_t fnv1a_hash(const void* data, size_t bytes) {
+  const auto* p = static_cast<const unsigned char*>(data);
+  uint64_t hash = 1469598103934665603ULL;
+  for (size_t i = 0; i < bytes; ++i) {
+    hash ^= p[i];
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+// Area-weighted metrics: equirectangular rows must be weighted by cell area,
+// otherwise polar rows dominate cell-count statistics.
+void write_metrics(std::ostream& os, const world_engine::terrain::TerrainDataset& ds,
+                   float sea_level_m) {
+  const auto& domain = ds.domain();
+  const int w = domain.width();
+  const int h = domain.height();
+  const auto& elev = ds.float_layer("elevation_eroded_m");
+
+  double total_area = 0.0;
+  double ocean_area = 0.0;
+  std::vector<std::pair<float, double>> weighted;  // (elevation, area)
+  weighted.reserve(static_cast<size_t>(w) * h);
+  for (int y = 0; y < h; ++y) {
+    const double a = domain.cell_area_m2(y);
+    for (int x = 0; x < w; ++x) {
+      const float z = elev[domain.index(x, y)];
+      total_area += a;
+      if (z < sea_level_m) {
+        ocean_area += a;
+      }
+      weighted.emplace_back(z, a);
+    }
+  }
+  std::sort(weighted.begin(), weighted.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+
+  const auto percentile = [&](double q) -> float {
+    double acc = 0.0;
+    for (const auto& [z, a] : weighted) {
+      acc += a;
+      if (acc >= q * total_area) {
+        return z;
+      }
+    }
+    return weighted.back().first;
+  };
+
+  os << "metrics:\n";
+  os << "  elevation_min_m: " << weighted.front().first << "\n";
+  os << "  elevation_max_m: " << weighted.back().first << "\n";
+  os << "  ocean_area_fraction: " << (ocean_area / total_area) << "\n";
+  os << "  hypsometric_percentiles_m:";
+  for (const double q : {0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99}) {
+    os << " p" << static_cast<int>(q * 100) << "=" << percentile(q);
+  }
+  os << "\n";
+
+  // Area-weighted elevation histogram (500 m bins from -8000 to 8000) for
+  // eyeballing bimodality (ocean mode near -4 km, land mode < +500 m).
+  constexpr int kBins = 32;
+  constexpr float kLo = -8000.0f;
+  constexpr float kHi = 8000.0f;
+  std::vector<double> hist(kBins, 0.0);
+  for (const auto& [z, a] : weighted) {
+    const int b = std::clamp(
+        static_cast<int>((z - kLo) / (kHi - kLo) * kBins), 0, kBins - 1);
+    hist[b] += a;
+  }
+  os << "  hypsometric_histogram_500m_bins:";
+  for (double v : hist) {
+    os << " " << static_cast<int>(1000.0 * v / total_area + 0.5);
+  }
+  os << "  (permille per bin, -8km..+8km)\n";
+
+  os << "  layer_hashes:\n";
+  for (const auto& name : ds.list_layers()) {
+    uint64_t hv = 0;
+    switch (ds.layer_type(name)) {
+      case world_engine::terrain::LayerDataType::kFloat32: {
+        const auto& v = ds.float_layer(name);
+        hv = fnv1a_hash(v.data(), v.size() * sizeof(float));
+        break;
+      }
+      case world_engine::terrain::LayerDataType::kUInt8: {
+        const auto& v = ds.u8_layer(name);
+        hv = fnv1a_hash(v.data(), v.size());
+        break;
+      }
+      case world_engine::terrain::LayerDataType::kInt32: {
+        const auto& v = ds.i32_layer(name);
+        hv = fnv1a_hash(v.data(), v.size() * sizeof(int32_t));
+        break;
+      }
+    }
+    os << "    " << name << ": " << std::hex << hv << std::dec << "\n";
+  }
+}
+
 bool write_pgm16(const std::string& path, const std::vector<float>& data, int w, int h) {
   if (data.empty() || w <= 0 || h <= 0) {
     return false;
@@ -352,5 +452,13 @@ int main(int argc, char** argv) {
             << " thermal=" << (params.erosion.enable_thermal ? "on" : "off")
             << " hillslope=" << (params.erosion.enable_hillslope ? "on" : "off") << "\n";
   std::cout << "output: " << out_dir << "\n";
+
+  write_metrics(std::cout, ds, params.hydrology.sea_level_m);
+  std::ofstream metrics_file(out_path / "metrics.txt");
+  if (metrics_file) {
+    metrics_file << "seed: " << params.seed << "\n";
+    metrics_file << "size: " << w << "x" << h << "\n";
+    write_metrics(metrics_file, ds, params.hydrology.sea_level_m);
+  }
   return 0;
 }
