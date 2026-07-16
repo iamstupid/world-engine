@@ -5,7 +5,7 @@ Procedural spherical terrain generator in C++ with deterministic seed control.
 Implemented pipeline:
 
 1. Seamless spherical noise seed.
-2. Tectonics stage (plate partition + rigid plate motion interaction proxy).
+2. Tectonics stage (Lagrangian plate simulation on an icosahedral geodesic grid: subduction, ridges, collision suturing, rifting).
 3. Base elevation combine.
 4. Analytical erosion stage (fixed-point + multigrid-inspired passes).
 5. Hydrology products (receiver + flow accumulation + river mask).

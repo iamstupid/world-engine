@@ -38,56 +38,74 @@ Generate a seamless primeval elevation prior to tectonics.
 - Paper references focus on tectonics/erosion, not noise implementation.
 - Noise stage is engineering initialization, not a tectonic/erosion scientific model.
 
-## 3. Tectonics Stage (Procedural Tectonic Planets)
+## 3. Tectonics Stage (Procedural Tectonic Planets, Lagrangian)
 
 Source:
 
 - `2019-Procedural-Tectonic-Planets.pdf`
 
-### 3.1 Key Paper Elements Used
+### 3.1 Model summary
 
-- Plate representation as spherical triangulation with attributes and barycentric interpolation.
-- Plate motion as rigid geodetic rotation.
-- Surface speed relation on sphere:
-  - `s(p) = omega * (w x p)` (paper text in model description).
-- Plate initialization from centroid partition (Voronoi-style) and optional warped boundaries.
-- Tectonic interaction families:
-  - subduction
-  - continental collision
-  - oceanic crust generation at diverging boundaries
-  - rifting events
-- Near-uniform sphere sampling via Fibonacci distribution (implementation section).
+Crust state lives on the cells of a canonical icosahedral geodesic grid
+(`world_engine/terrain/geodesic_grid.h`, frequency F, 10F^2+2 cells; neighbor
+indexing from `docs/references/sample_ico.hpp`; cell centers via the
+area-equalizing warped-gnomonic map). Plates are cell sets carried by rigid
+rotations `s(p) = omega (w x p)` (paper Section 3). Between global resamplings
+the crust of plate P sampled at canonical cell i is physically located at
+`delta_R_P * center(i)`; every `resample_interval_steps` the crust is
+re-projected onto the canonical grid (paper Section 6).
 
-### 3.2 Implementation Mapping
+Per-cell attributes (paper Table 1): plate id, crust type, elevation, oceanic
+age, orogeny type (Andean/Himalayan) + age, recent-uplift EMA.
 
-- Domain sampling:
-  - generate spherical sample points
-  - assign initial plate IDs by nearest centroid/geodesic distance
-- Distance warping:
-  - add deterministic low-frequency warped score terms per plate to avoid rigid Voronoi borders
-- Plate motion:
-  - each plate stores axis `w` and angular speed `omega`
-  - update per-step velocity field using rigid-rotation expression
-  - evaluate interactions over multiple time samples across total tectonic duration
-- Boundary classification:
-  - derive top-2 plate influence per cell from warped scores
-  - compute relative motion along local boundary tangent from those two plates
-  - classify convergent/divergent behavior and accumulate interaction
-- Elevation/uplift update:
-  - apply paper-inspired transfer profile factors for subduction uplift
-  - apply collision uplift on convergent continental contacts
-  - apply ridge uplift and oceanic crust renewal on divergent oceanic contacts
-- Interpolation:
-  - tectonic interaction is simulated on a coarse spherical raster and upsampled to target grid
-  - additional smoothing suppresses plate-cell imprint artifacts
+### 3.2 Interactions
 
-### 3.3 Assumptions (Explicit)
+- Subduction (4.1): convergent boundaries detected on the canonical
+  configuration after each resample; overriding side by buoyancy (continental
+  over oceanic, younger oceanic over older). Distance-to-front by Dijkstra
+  within the overriding plate, limited to r_s. Per step:
+  `u_e = u0 * f(d) * g(v) * h(z~)`, `h = z~^2` of the subducting side,
+  `g = closing_speed / v0` (normal component; oblique shear produces no
+  subduction flux).
+- Oceanic crust generation (4.3) at resample: divergence gaps get
+  `z = alpha * z_border + (1 - alpha) * z_ridge`,
+  `alpha = d_ridge / (d_ridge + d_plate)` from two Dijkstra fields; the ridge
+  is the gap skeleton (cells locally farthest from covered cells); age of new
+  crust is `alpha * window`.
+- Continental collision (4.2): interpenetration recorded during resample
+  arbitration per plate pair; event fires when penetration > 300 km. Surge
+  `dz = min(cap, delta_c * A) * (1 - (d/r)^2)^2` over
+  `r = r_c * sqrt((v/v0)(A/A0))`; the losing terrane sutures onto the winner
+  (plate id transfer); orogeny marked Himalayan.
+- Rifting (4.4): per plate per resample, `P = lambda e^-lambda`,
+  `lambda = lambda0 * (0.25 + 0.75 x_P) * A/A0 * window/100My`; splits into
+  2-4 warped-Voronoi fragments with diverging rotations.
+- Slab pull (4.1): subducting plates' axes drift toward their fronts,
+  `w += eps * sum_k normalize(c x q_k)`.
+- Per-step modifications (4.5): continental erosion `-(z/z_c) eps_c dt`,
+  oceanic dampening `-(1 - z/z_t) eps_o dt` (trenches emerge: oldest crust
+  sinks deepest and is consumed at fronts), trench sediment fill `+eps_t dt`
+  below the abyssal reference.
 
-- The paper is phenomenological and does not define one unique discretization for all operators.
-- When exact transfer-function constants are not uniquely specified, we use normalized monotone curves with exposed parameters.
-- We implement deterministic coarse-grid time sampling for tectonic evolution to keep full-resolution runtime practical.
-- Rifting trigger defaults to parameterized deterministic probability per step from seed and plate state.
-- Default tectonic duration is `250 My` (`simulation_steps=250`, `dt_myr=1`), matching the requested long-duration setting.
+### 3.3 Assumptions and deviations (explicit)
+
+1. `f(d)` exact coefficients are not given (paper Fig 6): we use f(0)=0.6,
+   peak 1 at 0.1 r_s, quartic Wendland decay to 0 at r_s (belts hug margins).
+2. Ridge template z_G is the constant crest z_r; the alpha blend supplies the
+   flank profile and age-driven dampening the long-term subsidence.
+3. Collision area A is read as the INTERPENETRATION area, not the whole
+   terrane area (delta_c * A with terrane areas reaches tens of km of surge
+   for subcontinents; the overlap reading is self-consistent across sizes).
+   A per-pair cooldown (3 resamples) and a surge cap regulate sustained
+   convergence between large plates until they suture.
+4. Continental-continental convergence produces no sustained subduction
+   uplift; it resolves as discrete collision events (prevents runaway
+   plateaus; the paper's forced subduction is an unmodeled transient).
+5. Sub-cell crust transport within a resample window is exact (rigid
+   rotation); resampling interpolates barycentrically over the geodesic
+   lattice triangle (planar weights).
+6. Determinism: all randomness from splitmix64 hashes of
+   (seed, entity id, step/resample counter); OpenMP loops are order-free.
 
 ## 4. Analytical Erosion Stage (Analytical Terrains)
 
@@ -95,46 +113,40 @@ Source:
 
 - `Analytical_Terrains_EG.pdf`
 
-### 4.1 Key Paper Elements Used
+### 4.1 Key elements used
 
-- Stream power PDE with uplift and drainage area.
-- Analytical treatment in `n = 1` case.
-- Method of characteristics and recursive evaluation strategy (paper equations in Section 4).
-- Fixed-point alternation between:
-  - drainage/receiver graph
-  - elevation update from analytical formulas
-- Multigrid-inspired coarse-to-fine acceleration (paper Section 5.2).
-- Receiver strategy recommendation:
-  - random choice among lower neighbors to reduce axis-aligned artifacts (paper discussion and results section).
-- Hillslope and thermal extensions in Section 6:
-  - hillslope influence through modified local coefficients
-  - thermal contribution under critical-slope condition
+- Stream power advection `dz/dt = u - k A^m ||grad z||` with n = 1 solved
+  analytically along receiver chains (paper Eqs 3-18): fixed-point iteration
+  between drainage graph and elevations, multigrid coarse-to-fine.
+- Uplift input is the tectonic recent-uplift EMA layer
+  (`uplift_rate_m_per_yr`), i.e. active margins and fresh sutures erode
+  against real uplift.
+- Receiver selection: random among lower neighbors proportional to slope,
+  over the 8-neighborhood (paper recommends drop-proportional over 4
+  neighbors; the 8-neighbor slope-weighted variant suppresses grid bias
+  further and is kept deliberately).
+- Single-receiver slope correction (paper 4.3 inset):
+  `a(x) = k A^m * dist * ||grad z|| / (z - z_r)`, gradient from per-axis
+  downstream differences, clamped [0.5, 2.5].
+- Hillslope enters the advection coefficient (paper Eq 26):
+  `a += (k_h / C) A^{-h}` with Hack constants C = 1.5, h = 0.6.
+- Thermal: post-pass critical-slope clamp along receiver edges (deviation:
+  the paper folds it into the interleaved analytical solve; the clamp is the
+  stable simplification).
+- Fixed-point EMA damping (paper 5.1) between iterations.
+- Multigrid prolongation with deterministic +-0.25 cell jitter (paper 5.2).
+- Depression handling: priority-flood carving from sea-level outlets before
+  receiver construction; outlets pin z = sea level.
 
-### 4.2 Implementation Mapping
+### 4.2 Assumptions (explicit)
 
-- Build receiver map from current elevation and boundary mask.
-- Compute drainage accumulation in topological order.
-- Evaluate analytical update along receiver chains using recursive cached terms.
-- Repeat fixed-point iterations until convergence threshold or max iterations.
-- Run multigrid schedule:
-  - coarse solve
-  - upsample
-  - fine correction
-
-Optional extensions:
-
-- hillslope coefficient term enabled by parameter
-- thermal term enabled when local slope exceeds critical threshold
-
-### 4.3 Assumptions (Explicit)
-
-- If analytical recursion becomes numerically unstable near boundary singular cases, clamp to boundary-consistent fallback.
-- If random receiver tie-breaks exist, random values are pre-generated deterministically from global seed and cell index.
-- We use 4-neighborhood receivers on raster for baseline; this matches paper implementation framing on regular grids.
-- Boundary/outlet mask for analytical erosion is built from `sea_level` with a low-quantile fallback to guarantee at least one outlet set.
-- Before receiver construction, we run a deterministic depression-fill step from outlets to avoid fragmented sink basins and guarantee outlet-connected flow paths.
-- Convergence stop criterion defaults to max absolute elevation delta below epsilon.
-- Optimization-based discontinuity correction is optional and initially omitted from MVP unless explicitly enabled.
+1. Boundary/outlet mask from `sea_level` with a low-quantile fallback.
+2. Ocean bathymetry is restored from the base elevation after erosion (the
+   solver only sculpts land).
+3. Erosion horizon defaults to 2 My (landscape response time): major channels
+   approach steady state while ridges stay young.
+4. Optimization-based discontinuity correction (paper 5.3) is not
+   implemented; multigrid + EMA handle basin-boundary discontinuities.
 
 ## 5. Hydrology, Rivers, Lakes, Ocean Masks
 

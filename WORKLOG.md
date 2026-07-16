@@ -131,3 +131,39 @@
 1. **Grid-aligned rivers** — FIXED (8-neighbor connectivity + slope-weighted selection)
 2. **Below-sea-level erosion** — FIXED (sea-level clamping at outlets + land cells)
 3. **Too many mountains** — FIXED (hypsometric curve + narrower tectonic belts + continental shelf)
+
+---
+
+# Lagrangian Tectonics Rebuild (M0-M5)
+
+## Date: 2026-07-17
+
+The Eulerian per-cell tectonics experiment (archived on branch
+`experiment/tectonics-eulerian`) was replaced by a Lagrangian implementation
+of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
+`docs/TECTONICS_PLAN.md`; algorithm mapping: `docs/ALGORITHMS.md`.
+
+## Milestones landed
+
+- M0: metrics harness in the CLI (area-weighted ocean fraction, hypsometric
+  percentiles/histogram, per-layer FNV hashes -> metrics.txt).
+- M1: `GeodesicGrid` (ring-layout neighbor indexing, warped-gnomonic
+  geometry, Newton locate) + invariant tests; crust transported by rigid
+  plate rotations with periodic global resampling. Gates: continental drift
+  measured, area conserved, no polar artifacts.
+- M2: subduction uplift with distance-to-front Dijkstra, ridge generation in
+  divergence gaps, age-driven ocean floor. Gate: ocean age/depth correlation
+  -0.93...-0.97 (the quantitative "no re-stamping" check).
+- M3: continental collision with terrane suturing, rifting, slab pull.
+  Wilson-cycle behavior observed (supercontinent assembly then breakup).
+- M4: erosion consumes the real recent-uplift EMA; Tzathas alignment (slope
+  correction, hillslope in a(s), fixed-point EMA, jittered multigrid).
+- M5: 4096x2048 reference run (seed 1337, --tect-freq 250) in ~23 s wall on
+  32 threads (WSL2/gcc); bimodal hypsometry; ocean 74%.
+
+## Verification
+
+- `ctest`: 6 suites including test_geodesic (grid invariants) and
+  test_tectonics (drift, conservation, age-depth correlation gates).
+- Reference outputs in `output_reference/` (gitignored); metrics.txt captures
+  layer hashes for regression comparison.
