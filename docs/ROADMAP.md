@@ -337,3 +337,64 @@ opposite-side vista).
   coastline fixes.
 - M12+ entity schema per the expanded kind list; sky model lands with M13
   queries; agentic workspace is M14+ alongside the editor.
+
+---
+
+## Addendum (2026-07-17c): vector hydrology, refinement pyramid, city maps
+
+### Rivers are vector features, period
+
+Raster resolution can never represent rivers (a 30 m channel is sub-pixel at
+any global grid); cartography draws rivers as lines at every scale. Four
+layers, the river network being the consistency backbone across all LODs:
+
+1. **Vector extraction** (M11, from existing sim data): trace super-threshold
+   channels from the receiver/MFD graphs into directed polyline trees;
+   per-vertex hydraulic attributes: discharge Q, width ~ a*Q^0.5, depth ~
+   c*Q^0.4, Strahler order, monotone elevation profile. Lakes as polygons;
+   knickpoints as waterfall POIs. Globe rendering: anti-aliased vector
+   strokes, width by discharge.
+2. **Deterministic meander refinement**: per-reach seeded sub-cell shape —
+   sinuosity from slope/discharge (oxbows in floodplains, braiding flags);
+   identical geometry at every zoom and revisit.
+3. **DEM conditioning (stream burning)**: any locally generated raster gets
+   the refined river vectors carved in (channel, banks, floodplain) so
+   raster terrain and vector hydrology always agree.
+4. **On-demand local re-simulation** (new: refinement pyramid): for a region
+   of interest (~200x200 km), re-run erosion/hydrology on a tangent-plane
+   projection at 100-400 m cells with boundary conditions sampled from the
+   global solution (edge elevations pinned, inflow discharges injected);
+   deterministic region seeds; tile cache. Sub-threshold tributaries
+   generated as constrained space-filling trees per catchment (Genevaux
+   2013), each draining into the correct parent reach.
+
+Resolution pyramid: global N=2048 (topology + discharge truth) -> region
+tiles 100-400 m (valley morphology) -> city patches 1-10 m (vector-first).
+
+### City maps (M15)
+
+No off-the-shelf library generates cities on given terrain (CityEngine is
+commercial; Parish & Muller 2001 L-system roads and Chen 2008 tensor-field
+streets are the academic basis). We compose our own generator; mature parts
+we do adopt: CGAL (straight skeleton parceling), Clipper2 (offsets/booleans),
+shapely/GEOS on the Python side, MVT tiles + MapLibre GL for 2D city map
+rendering, GeoPackage export for QGIS interop.
+
+Pipeline: site model (region-tile terrain + river vectors: fords, bridges,
+quays; M11 roads define the gates) -> macro structure by culture/era
+(organic vs planned vs radial; wall rings per era = city growth history via
+the existing era machinery) -> tensor-field street synthesis (coast/river
+tangents, contour-following on slopes, radial cores, grid districts) ->
+blocks from street-graph faces, straight-skeleton/OBB parceling, land use by
+accessibility+slope+rules (market near gates/harbor, elites upwind/uphill,
+industry downstream) -> building footprints + landmark grammar -> all
+semantics as entities (districts, named streets, POIs: inns, gates, bridges,
+wells) -> earthworks write-back (cut-and-fill terracing, embankments) so the
+local DEM and the city co-adapt.
+
+### Milestone impact
+
+- M9/M11 gain vector hydrology (extraction + refinement + conditioning).
+- New M11.5: refinement pyramid (region tiles, boundary-conditioned local
+  re-simulation, tributary synthesis).
+- New M15: city map generation (after civ layer + refinement pyramid).
