@@ -27,7 +27,8 @@ const api = {
 
 const state = {
   sid: null,
-  layers: {},        // name -> {arr,w,h,dtype}
+  layers: {},        // name -> {arr,w,h,dtype} (equirect, 2D map view)
+  cellLayers: {},    // name -> Float32Array (geodesic transport, globe)
   layerNames: [],
   current: "elevation_eroded_m",
   overlay: "",
@@ -187,8 +188,13 @@ function initGlobe() {
   globe.scene.add(light);
   globe.scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 
-  const geo = new THREE.SphereGeometry(1, 256, 128);
-  const mat = new THREE.MeshStandardMaterial({ color: 0x3355aa, roughness: 0.95 });
+  // Geodesic-native globe (plan addendum b): geometry arrives as the
+  // stitched icosahedral mesh from /globe_mesh; every attribute is a
+  // cell-order array from /cell_layer — no equirect on this path.
+  const geo = new THREE.SphereGeometry(1, 32, 16);  // placeholder until mesh loads
+  const mat = new THREE.MeshStandardMaterial({ color: 0x223355, roughness: 0.95,
+                                               vertexColors: false,
+                                               side: THREE.DoubleSide });
   globe.mesh = new THREE.Mesh(geo, mat);
   globe.group.add(globe.mesh);
 
@@ -216,7 +222,7 @@ function initGlobe() {
       const p = hits[0].point.clone().applyMatrix4(globe.group.matrixWorld.clone().invert()).normalize();
       const lat = Math.asin(p.y) * 180 / Math.PI;
       const lon = Math.atan2(p.z, p.x) * 180 / Math.PI;
-      runQuery(lat, -lon);  // texture wraps opposite handedness
+      runQuery(lat, lon);  // cell centers carry true domain coordinates
     }
   });
 
@@ -230,42 +236,132 @@ function initGlobe() {
   resize();
 
   (function loop() {
-    if (state.view === "globe" && !dragging) globe.group.rotation.y += 0.0012;
+    const spin = document.getElementById("auto-rotate");
+    if (state.view === "globe" && !dragging && spin && spin.checked) {
+      globe.group.rotation.y += 0.0012;
+    }
     globe.renderer.render(globe.scene, globe.camera);
     requestAnimationFrame(loop);
   })();
 }
 
-function updateGlobe() {
-  const data = state.layers[state.current];
-  if (!data) return;
-  const imgData = colormapLayer(state.current, data);
-  if (!globe.texCanvas) globe.texCanvas = document.createElement("canvas");
-  globe.texCanvas.width = data.w; globe.texCanvas.height = data.h;
-  globe.texCanvas.getContext("2d").putImageData(imgData, 0, 0);
-  const tex = new THREE.CanvasTexture(globe.texCanvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  globe.mesh.material.map = tex;
+// ---- geodesic transport: mesh + cell-order attribute arrays ----
+
+const CELL_MAP = {
+  elevation_eroded_m: "cell_elevation_m", biome_id: "cell_biome",
+  temperature_c: "cell_temperature_c", precipitation_mm_yr: "cell_precip_mm",
+  flow_accumulation_m2: "cell_flow_accum_m2", vegetation: "cell_vegetation",
+  ocean_mask: "cell_ocean",
+};
+
+async function loadGlobeMesh() {
+  const r = await fetch(`/api/sessions/${state.sid}/globe_mesh`);
+  if (!r.ok) return false;
+  const cells = +r.headers.get("X-Cells");
+  const tris = +r.headers.get("X-Tris");
+  const buf = await r.arrayBuffer();
+  const pos = new Float32Array(buf, 0, cells * 3);
+  const idx = new Uint32Array(buf, cells * 12, tris * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(cells * 3).fill(0.4), 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
+  globe.mesh.geometry.dispose();
+  globe.mesh.geometry = geo;
+  globe.mesh.material.vertexColors = true;
+  globe.mesh.material.map = null;
   globe.mesh.material.color.set(0xffffff);
   globe.mesh.material.needsUpdate = true;
+  globe.dirs = new Float32Array(pos);  // pristine unit directions
+  globe.cells = cells;
+  globe.displaced = false;
+  return true;
+}
 
-  const elev = state.layers["elevation_eroded_m"];
-  if (elev) {
+async function fetchCellLayer(name) {
+  if (state.cellLayers[name]) return state.cellLayers[name];
+  const r = await fetch(`/api/sessions/${state.sid}/cell_layer/${name}`);
+  if (!r.ok) return null;
+  const arr = new Float32Array(await r.arrayBuffer());
+  state.cellLayers[name] = arr;
+  return arr;
+}
+
+function cellColor(name, v, mn, mx) {
+  if (name.includes("elevation")) return hypsometric(v);
+  if (name === "biome_id" || name === "cell_biome") {
+    return BIOME_COLORS[Math.min(BIOME_COLORS.length - 1, Math.max(0, v | 0))];
+  }
+  if (name === "plate_id") {
+    return hslToRgb((((v * 2654435761) >>> 0) % 360) / 360, 0.55, 0.5);
+  }
+  if (name === "temperature_c") {
+    const t = Math.min(1, Math.max(0, (v + 30) / 65));
+    return [255 * t, 80 + 100 * (1 - Math.abs(t - 0.5) * 2), 255 * (1 - t)];
+  }
+  if (name === "precipitation_mm_yr") {
+    const t = Math.min(1, Math.max(0, v / 2500));
+    return [190 * (1 - t) + 20 * t, 160 * (1 - t) + 90 * t, 90 * (1 - t) + 220 * t];
+  }
+  if (name.endsWith("mask") || name === "crust_type") {
+    return v > 0 ? [235, 235, 235] : [25, 25, 25];
+  }
+  const t = (v - mn) / Math.max(1e-9, mx - mn);
+  const c = 255 * Math.sqrt(Math.min(1, Math.max(0, t)));
+  return [c, c, c];
+}
+
+async function updateGlobe() {
+  if (!globe.mesh) return;
+  if (!globe.dirs && !(await loadGlobeMesh())) return;
+  const elevCell = await fetchCellLayer("cell_elevation_m");
+  if (!elevCell) return;
+  const n = globe.cells;
+  const dirs = globe.dirs;
+
+  if (!globe.displaced) {
     const pos = globe.mesh.geometry.attributes.position;
-    const uv = globe.mesh.geometry.attributes.uv;
-    const v = new THREE.Vector3();
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i).normalize();
-      const u = uv.getX(i), w = uv.getY(i);
-      const x = Math.min(elev.w - 1, Math.max(0, Math.round(u * (elev.w - 1))));
-      const y = Math.min(elev.h - 1, Math.max(0, Math.round((1 - w) * (elev.h - 1))));
-      const z = elev.arr[y * elev.w + x];
-      const r = 1 + Math.max(0, z) * 6e-6 - (z < 0 ? 1.5e-6 * Math.min(0, -z) : 0);
-      pos.setXYZ(i, v.x * r, v.y * r, v.z * r);
+    for (let i = 0; i < n; i++) {
+      const z = elevCell[i];
+      const r = 1 + Math.max(0, z) * 6e-6 - (z < 0 ? 1.5e-6 * -z : 0);
+      pos.setXYZ(i, dirs[i * 3] * r, dirs[i * 3 + 1] * r, dirs[i * 3 + 2] * r);
     }
     pos.needsUpdate = true;
     globe.mesh.geometry.computeVertexNormals();
+    globe.displaced = true;
   }
+
+  const name = state.current;
+  const vals = CELL_MAP[name] ? await fetchCellLayer(CELL_MAP[name]) : null;
+  const eq = state.layers[name];  // fallback for tectonics-only rasters
+  if (!vals && !eq) return;
+  const getVal = (i) => {
+    if (vals) return vals[i];
+    const lat = Math.asin(Math.max(-1, Math.min(1, dirs[i * 3 + 1])));
+    const lon = Math.atan2(dirs[i * 3 + 2], dirs[i * 3]);
+    const x = Math.min(eq.w - 1, Math.max(0, Math.round(
+      ((lon / Math.PI * 180) + 180) / 360 * (eq.w - 1))));
+    const y = Math.min(eq.h - 1, Math.max(0, Math.round(
+      (90 - lat / Math.PI * 180) / 180 * (eq.h - 1))));
+    return eq.arr[y * eq.w + x];
+  };
+  let mn = Infinity, mx = -Infinity;
+  const needMM = !(name.includes("elevation") || name === "biome_id" ||
+                   name.endsWith("mask") || name === "crust_type" ||
+                   name === "plate_id");
+  if (needMM) {
+    for (let i = 0; i < n; i++) {
+      const v = getVal(i);
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+  }
+  const col = globe.mesh.geometry.attributes.color;
+  for (let i = 0; i < n; i++) {
+    const [r, g, b] = cellColor(name, getVal(i), mn, mx);
+    col.setXYZ(i, r / 255, g / 255, b / 255);
+  }
+  col.needsUpdate = true;
 }
 
 // ---------------- 2D map ----------------
@@ -409,6 +505,9 @@ async function loadAllLayers() {
   if (info.layers.includes(state.current)) select.value = state.current;
   else state.current = info.layers[0];
   state.layers = {};
+  state.cellLayers = {};      // geodesic transport cache
+  globe.dirs = null;          // frequency may have changed: reload mesh
+  globe.displaced = false;
   for (const name of info.layers) {
     state.layers[name] = await api.layer(state.sid, name);
   }

@@ -201,6 +201,44 @@ def get_layer(sid: str, name: str):
                              "X-Height": str(s.result["height"])})
 
 
+_GLOBE_MESH_CACHE: dict[int, tuple] = {}
+
+
+@app.get("/api/sessions/{sid}/globe_mesh")
+def globe_mesh(sid: str):
+    """Stitched icosahedral mesh for the client globe (plan addendum b:
+    the geodesic cell array IS the transport format — zero waste, no
+    polar oversampling). Body = unit cell centers (f32 x 3n) followed by
+    triangle indices (u32 x 3t); attributes ride separately via
+    /cell_layer/{name} in the same cell order."""
+    s = _session(sid)
+    if s.result is None or "cell_elevation_m" not in s.result.get(
+            "cell_layers", {}):
+        raise HTTPException(409, "no cell layers yet")
+    freq = int(s.result["cell_layers"]["cell_elevation_m"]["frequency"])
+    if freq not in _GLOBE_MESH_CACHE:
+        g = weterrain.geodesic_graph(freq)
+        n = g["cell_count"]
+        nb = np.frombuffer(g["neighbors_i32"], np.int32).reshape(n, 6)
+        deg = np.frombuffer(g["degree_i8"], np.int8).astype(np.int64)
+        pos = np.frombuffer(g["centers_f64"], np.float64).reshape(n, 3)
+        idx = np.arange(n, dtype=np.int64)
+        parts = []
+        for k in range(6):
+            valid = deg > k
+            a = nb[idx, k]
+            b = nb[idx, (k + 1) % deg]
+            keep = valid & (a >= 0) & (idx < a) & (idx < b)
+            parts.append(np.stack([idx[keep], a[keep], b[keep]], axis=1))
+        tri = np.concatenate(parts).astype(np.uint32)
+        _GLOBE_MESH_CACHE[freq] = (pos.astype(np.float32).tobytes(),
+                                   tri.tobytes(), n, tri.shape[0])
+    p, t, n, nt = _GLOBE_MESH_CACHE[freq]
+    return Response(content=p + t, media_type="application/octet-stream",
+                    headers={"X-Cells": str(n), "X-Tris": str(nt),
+                             "X-Frequency": str(freq)})
+
+
 @app.get("/api/sessions/{sid}/cell_layer/{name}")
 def get_cell_layer(sid: str, name: str):
     s = _session(sid)
