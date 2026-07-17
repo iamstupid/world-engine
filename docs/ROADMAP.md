@@ -499,3 +499,31 @@ physics) → Planet (Kepler elements, AU) → Moon**, replacing skymodel v1
 - Proper motion over story time; galactic band rendering (client-side
   from `/astro/galaxy`).
 - Star-chart UI (web-side; consumes `/astro/galaxy` + `/astro/sky_from`).
+
+---
+
+## Status update (2026-07-17f): backend batch IMPLEMENTED
+
+Implemented and gated this round (see WORKLOG for detail):
+
+- **Amplification stage** (addendum b): attribute-modulated sphere-evaluated
+  detail with per-level octave caps; `amplify.*` params. **N=2048 validated**:
+  41.9M cells, 116 s, 8.2 GB peak (32 cores).
+- **Tzathas 5.3** optimization-based altitude correction
+  (`erosion.discontinuity_iterations`), deterministic gather gradients.
+- **Rhombus atlas** served: `/cell_layer/{name}`, `/cell_atlas/{name}`
+  (atlas.py; exact-bijection tests).
+- **Vector rivers** (addendum c, rivers.py): hydraulic widths, deterministic
+  meanders, stream burning (`elevation_conditioned_m`), sub-threshold
+  tributary trees; civ.py consumes it.
+- **M11.5 refinement pyramid** (refine.py, `/refine`): locked-boundary tiles,
+  world-anchored detail noise, local analytical erosion.
+- **M14 skeleton** (novelkit.py): Project/changesets (staged→merge),
+  characters with location trails, travel & news-arrival consistency checks;
+  `.weproj` persistence. Demo: `tools/scripts/novel_demo.py` drives an
+  external LLM with a simulated fact pack (docs/samples/isekai_demo.md).
+- **Astro leftovers**: optional second sun (home companion), proper motion
+  (epoch-aware star charts).
+
+Still open on this ladder: tectonics-at-F≈500 production preset, virtual
+texture streaming + star-chart UI (web), M15 city generation.
