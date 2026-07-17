@@ -1206,6 +1206,25 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
       uplift[idx] = std::max(static_cast<float>(up), floor);
     }
   }
+
+  // Graph operators (plan: DAG pipeline) consume the canonical crust as
+  // cell fields — the geodesic array IS the product, the raster above is
+  // just a view.
+  {
+    const int nc = static_cast<int>(crust.elevation_m.size());
+    std::vector<float> up_cells(nc);
+    std::vector<float> type_cells(nc);
+    for (int i = 0; i < nc; ++i) {
+      const float floor_up = (crust.type[i] == 1) ? 1e-5f : 0.0f;
+      up_cells[i] = std::max(crust.uplift_ema_m_yr[i], floor_up);
+      type_cells[i] = static_cast<float>(crust.type[i]);
+    }
+    const int tf = params.tectonics.grid_frequency;
+    dataset.set_cell_layer("tect_elevation_m", tf, crust.elevation_m);
+    dataset.set_cell_layer("tect_uplift_m_yr", tf, std::move(up_cells));
+    dataset.set_cell_layer("tect_age_myr", tf, crust.age_myr);
+    dataset.set_cell_layer("tect_crust_type", tf, std::move(type_cells));
+  }
 }
 
 void run_combine_stage(const PipelineParams& params, TerrainDataset& dataset) {

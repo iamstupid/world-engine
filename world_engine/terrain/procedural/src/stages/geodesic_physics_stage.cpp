@@ -561,9 +561,38 @@ std::vector<int> distribute_iterations(int total, int levels) {
 }  // namespace
 
 void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& dataset) {
+  run_geodesic_physics_stage_fields(params, dataset, 0, nullptr, 0, nullptr);
+}
+
+void run_geodesic_physics_stage_fields(const PipelineParams& params,
+                                       TerrainDataset& dataset,
+                                       int z0_freq,
+                                       const std::vector<float>* z0_cells,
+                                       int up_freq,
+                                       const std::vector<float>* up_cells) {
   const auto& domain = dataset.domain();
-  const auto& base = dataset.float_layer("elevation_base_m");
-  const auto& uplift_raster = dataset.float_layer("uplift_rate_m_per_yr");
+  const bool field_mode = (z0_cells != nullptr);
+  const std::vector<float>* base_r =
+      field_mode ? nullptr : &dataset.float_layer("elevation_base_m");
+  const std::vector<float>* uplift_r =
+      field_mode ? nullptr : &dataset.float_layer("uplift_rate_m_per_yr");
+  std::unique_ptr<GeodesicGrid> z0_grid;
+  std::unique_ptr<GeodesicGrid> up_grid;
+  if (field_mode) {
+    z0_grid = std::make_unique<GeodesicGrid>(z0_freq);
+    if (up_cells != nullptr) {
+      up_grid = std::make_unique<GeodesicGrid>(up_freq);
+    }
+  }
+  const auto interp = [](const GeodesicGrid& g, const std::vector<float>& v,
+                         const Vec3d& c) {
+    const auto lk = g.locate(c);
+    float out = 0.0f;
+    for (int k = 0; k < 3; ++k) {
+      out += static_cast<float>(lk.weight[k]) * v[lk.cell[k]];
+    }
+    return out;
+  };
   const float sea = params.hydrology.sea_level_m;
   // Drowned-coast flooding (coastline fix 3): erode against lowstand
   // outlets, then flood back to sea level - valleys carved below today's sea
@@ -665,8 +694,14 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; ++i) {
       const Vec3d& c = grid->cell_center(i);
-      z0[i] = sample_raster(domain, base, c);
-      uplift[i] = sample_raster(domain, uplift_raster, c);
+      if (field_mode) {
+        z0[i] = interp(*z0_grid, *z0_cells, c);
+        uplift[i] = (up_cells != nullptr) ? interp(*up_grid, *up_cells, c)
+                                          : 0.0f;
+      } else {
+        z0[i] = sample_raster(domain, *base_r, c);
+        uplift[i] = sample_raster(domain, *uplift_r, c);
+      }
       if (uplift_paint != nullptr) {
         uplift[i] += std::max(0.0f, sample_paint(*uplift_paint, c));
       }

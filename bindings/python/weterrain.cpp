@@ -14,9 +14,12 @@
 #include <vector>
 
 #include "world_engine/terrain/geodesic_grid.h"
+#include "world_engine/terrain/procedural/graph_ops.h"
 #include "world_engine/terrain/procedural/param_schema.h"
 #include "world_engine/terrain/procedural/pipeline.h"
 #include "world_engine/terrain/procedural/params.h"
+#include "world_engine/terrain/procedural/stages/geodesic_physics_stage.h"
+#include "world_engine/terrain/procedural/stages/tectonics_stage.h"
 
 namespace py = pybind11;
 namespace wt = world_engine::terrain;
@@ -32,22 +35,29 @@ py::bytes vec_bytes(const void* data, size_t bytes) {
   return py::bytes(static_cast<const char*>(data), bytes);
 }
 
+void apply_paint(wtp::PipelineParams& params, const py::object& paint) {
+  if (paint.is_none()) {
+    return;
+  }
+  for (const auto item : paint.cast<py::dict>()) {
+    const auto name = item.first.cast<std::string>();
+    const auto tup = item.second.cast<py::tuple>();
+    wtp::PaintLayer layer;
+    layer.width = tup[0].cast<int>();
+    layer.height = tup[1].cast<int>();
+    const auto raw = tup[2].cast<std::string>();
+    layer.data.resize(raw.size() / sizeof(float));
+    std::memcpy(layer.data.data(), raw.data(), layer.data.size() * sizeof(float));
+    params.paint_layers[name] = std::move(layer);
+  }
+}
+
+py::dict pack_dataset(const wt::TerrainDataset& ds);
+
 py::dict generate(const wtp::PipelineParams& params_in, py::object progress,
                   std::shared_ptr<CancelFlag> cancel, py::object paint) {
   wtp::PipelineParams params = params_in;
-  if (!paint.is_none()) {
-    for (const auto item : paint.cast<py::dict>()) {
-      const auto name = item.first.cast<std::string>();
-      const auto tup = item.second.cast<py::tuple>();
-      wtp::PaintLayer layer;
-      layer.width = tup[0].cast<int>();
-      layer.height = tup[1].cast<int>();
-      const auto raw = tup[2].cast<std::string>();
-      layer.data.resize(raw.size() / sizeof(float));
-      std::memcpy(layer.data.data(), raw.data(), layer.data.size() * sizeof(float));
-      params.paint_layers[name] = std::move(layer);
-    }
-  }
+  apply_paint(params, paint);
   wtp::ProgressFn progress_fn;
   if (!progress.is_none()) {
     auto cb = std::make_shared<py::function>(progress.cast<py::function>());
@@ -69,6 +79,10 @@ py::dict generate(const wtp::PipelineParams& params_in, py::object progress,
                       cancel ? &cancel->flag : nullptr);
   }
 
+  return pack_dataset(ds);
+}
+
+py::dict pack_dataset(const wt::TerrainDataset& ds) {
   py::dict out;
   out["width"] = ds.domain().width();
   out["height"] = ds.domain().height();
@@ -145,6 +159,88 @@ py::dict geodesic_graph(int frequency) {
   return out;
 }
 
+// ---- graph operators (DAG pipeline, docs/PIPELINE_DAG_DESIGN.md) ----
+
+py::bytes vecf_bytes(const std::vector<float>& v) {
+  return py::bytes(reinterpret_cast<const char*>(v.data()),
+                   v.size() * sizeof(float));
+}
+
+std::vector<float> bytes_vecf(const py::bytes& b) {
+  const auto raw = static_cast<std::string>(b);
+  std::vector<float> v(raw.size() / sizeof(float));
+  std::memcpy(v.data(), raw.data(), raw.size());
+  return v;
+}
+
+py::bytes op_noise_cells(int frequency, int seed, double base_frequency,
+                         int octaves, double lacunarity, double gain,
+                         double amplitude, bool ridged) {
+  std::vector<float> out;
+  {
+    py::gil_scoped_release release;
+    out = wtp::noise_cells(frequency, seed, base_frequency, octaves,
+                           lacunarity, gain, amplitude, ridged);
+  }
+  return vecf_bytes(out);
+}
+
+py::bytes op_resample_cells(int src_freq, py::bytes src, int dst_freq) {
+  const auto v = bytes_vecf(src);
+  std::vector<float> out;
+  {
+    py::gil_scoped_release release;
+    out = wtp::resample_cells(src_freq, v, dst_freq);
+  }
+  return vecf_bytes(out);
+}
+
+py::bytes op_rasterize_cells(int freq, py::bytes cells, int width, int height) {
+  const auto v = bytes_vecf(cells);
+  std::vector<float> out;
+  {
+    py::gil_scoped_release release;
+    out = wtp::rasterize_cells(freq, v, width, height);
+  }
+  return vecf_bytes(out);
+}
+
+py::dict op_tectonics_cells(const wtp::PipelineParams& params_in,
+                            py::object paint) {
+  wtp::PipelineParams params = params_in;
+  apply_paint(params, paint);
+  wt::TerrainDataset ds(
+      wt::TerrainDomain(64, 32, params.radius_m));
+  ds.set_seed(params.seed);
+  {
+    py::gil_scoped_release release;
+    wtp::stages::run_tectonics_stage(params, ds);
+  }
+  return pack_dataset(ds);
+}
+
+py::dict op_physics_cells(const wtp::PipelineParams& params_in,
+                          int z0_freq, py::bytes z0, int up_freq,
+                          py::object uplift, int width, int height,
+                          py::object paint) {
+  wtp::PipelineParams params = params_in;
+  apply_paint(params, paint);
+  const auto z0v = bytes_vecf(z0);
+  std::vector<float> upv;
+  const bool has_up = !uplift.is_none();
+  if (has_up) {
+    upv = bytes_vecf(uplift.cast<py::bytes>());
+  }
+  wt::TerrainDataset ds(wt::TerrainDomain(width, height, params.radius_m));
+  ds.set_seed(params.seed);
+  {
+    py::gil_scoped_release release;
+    wtp::stages::run_geodesic_physics_stage_fields(
+        params, ds, z0_freq, &z0v, up_freq, has_up ? &upv : nullptr);
+  }
+  return pack_dataset(ds);
+}
+
 // Atlas pixel -> cell id map (row-major, height 2F, width 5F); the two pole
 // cells are not part of the atlas.
 py::bytes atlas_map(int frequency) {
@@ -196,4 +292,17 @@ PYBIND11_MODULE(weterrain, m) {
         py::arg("paint") = py::none());
   m.def("geodesic_graph", &geodesic_graph, py::arg("frequency"));
   m.def("atlas_map", &atlas_map, py::arg("frequency"));
+  m.def("noise_cells", &op_noise_cells, py::arg("frequency"), py::arg("seed"),
+        py::arg("base_frequency"), py::arg("octaves"), py::arg("lacunarity"),
+        py::arg("gain"), py::arg("amplitude"), py::arg("ridged") = false);
+  m.def("resample_cells", &op_resample_cells, py::arg("src_freq"),
+        py::arg("src"), py::arg("dst_freq"));
+  m.def("rasterize_cells", &op_rasterize_cells, py::arg("freq"),
+        py::arg("cells"), py::arg("width"), py::arg("height"));
+  m.def("tectonics_cells", &op_tectonics_cells, py::arg("params"),
+        py::arg("paint") = py::none());
+  m.def("physics_cells", &op_physics_cells, py::arg("params"),
+        py::arg("z0_freq"), py::arg("z0"), py::arg("up_freq") = 0,
+        py::arg("uplift") = py::none(), py::arg("width") = 512,
+        py::arg("height") = 256, py::arg("paint") = py::none());
 }

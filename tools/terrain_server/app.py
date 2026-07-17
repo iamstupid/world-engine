@@ -512,6 +512,79 @@ def api_astro_events(sid: str, t0: float = 0.0, days: float = 360.0):
             "conjunctions": obs.conjunctions(t0, days)}
 
 
+# ---- DAG pipeline (docs/PIPELINE_DAG_DESIGN.md) ----
+
+@app.get("/api/graph/schema")
+def graph_schema():
+    import graphdag
+    return {"nodes": graphdag.REGISTRY}
+
+
+@app.get("/api/graph/template")
+def graph_template():
+    import graphdag
+    return graphdag.default_template()
+
+
+@app.get("/api/sessions/{sid}/graph")
+def graph_get(sid: str):
+    s = _session(sid)
+    import graphdag
+    return getattr(s, "graph_spec", None) or graphdag.default_template()
+
+
+@app.post("/api/sessions/{sid}/graph/validate")
+async def graph_validate(sid: str, request: Request):
+    import graphdag
+    spec = await request.json()
+    try:
+        freqs = graphdag.infer_frequencies(spec)
+        return {"ok": True, "frequencies": freqs}
+    except graphdag.GraphError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/sessions/{sid}/graph/run")
+async def graph_run(sid: str, request: Request):
+    s = _session(sid)
+    if s.running():
+        raise HTTPException(409, "generation already running")
+    spec = await request.json()
+    import graphdag
+    try:
+        graphdag.infer_frequencies(spec)
+    except graphdag.GraphError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    s.graph_spec = spec
+    s.loop = asyncio.get_running_loop()
+    s.queue = asyncio.Queue()
+
+    def work():
+        try:
+            def prog(nid, i, total):
+                _push(s, {"type": "progress", "stage": f"node:{nid}",
+                          "index": i + 1, "total": total, "phase": 0.0})
+            out = graphdag.execute(spec, s, progress=prog)
+            s.result = out
+            s.geo = None
+            s.astro = None
+            s.error = None
+            try:
+                import civ
+                civ.generate_civilization(s)
+            except Exception:  # noqa: BLE001 — graph may omit physics
+                pass
+            _push(s, {"type": "done", "hash": out.get("hash", ""),
+                      "evaluated": out.get("evaluated", [])})
+        except Exception as exc:  # noqa: BLE001
+            s.error = str(exc)
+            _push(s, {"type": "error", "message": str(exc)})
+
+    s.job = threading.Thread(target=work, daemon=True)
+    s.job.start()
+    return {"started": True}
+
+
 # ---- RP-3: controlled roleplay endpoints ----
 
 def _rp(s: Session):

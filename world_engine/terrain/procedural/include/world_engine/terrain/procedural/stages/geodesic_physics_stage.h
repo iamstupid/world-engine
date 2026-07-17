@@ -13,4 +13,15 @@ namespace world_engine::terrain::procedural::stages {
 // and masks stages.
 void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& dataset);
 
+// Graph-operator variant (DAG pipeline / IGM-ization): z0 and uplift come
+// in as geodesic cell fields at their own frequencies (interpolated per
+// multigrid level via locate) instead of being sampled from rasters.
+// Pass null pointers to fall back to the raster inputs.
+void run_geodesic_physics_stage_fields(const PipelineParams& params,
+                                       TerrainDataset& dataset,
+                                       int z0_freq,
+                                       const std::vector<float>* z0_cells,
+                                       int up_freq,
+                                       const std::vector<float>* up_cells);
+
 }  // namespace world_engine::terrain::procedural::stages
