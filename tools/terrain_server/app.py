@@ -474,9 +474,189 @@ def api_astro_events(sid: str, t0: float = 0.0, days: float = 360.0):
             "conjunctions": obs.conjunctions(t0, days)}
 
 
+# ---- RP-3: controlled roleplay endpoints ----
+
+def _rp(s: Session):
+    if getattr(s, "rp", None) is None:
+        raise HTTPException(409, "roleplay not initialized")
+    return s.rp
+
+
+@app.post("/api/sessions/{sid}/rp/init")
+async def rp_init(sid: str, request: Request):
+    s = _session(sid)
+    body = await request.json()
+    import novelkit
+    import refpack as refpack_mod
+    import rpkit
+    from llmpool import LLMPool
+    _, obs = _astro(s)
+    pool = LLMPool() if body.get("use_ai", True) else None
+    s.rp_project = novelkit.Project(body.get("name", "rp"), s)
+    s.rp = rpkit.Roleplay(
+        s, pool=pool, obs=obs, project=s.rp_project,
+        refpack_fn=lambda ss, oo, lon, lat, t:
+            refpack_mod.scene_refpack(ss, oo, lon, lat, t))
+    return {"ok": True, "ai": pool is not None}
+
+
+@app.post("/api/sessions/{sid}/rp/seat")
+async def rp_seat(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    rp.add_seat(body["name"], kind=body.get("kind", "actor"),
+                automation=body.get("automation", "manual"),
+                ai_role=body.get("ai_role"),
+                place=body.get("place"),
+                persona=body.get("persona", ""), goals=body.get("goals", ""),
+                mood=body.get("mood", ""))
+    return {"ok": True}
+
+
+@app.get("/api/sessions/{sid}/rp/state")
+def rp_state(sid: str):
+    rp = _rp(_session(sid))
+    scene = rp.current_scene()
+    return {"clock": rp.clock,
+            "seats": {n: {"kind": st.kind, "automation": st.automation,
+                          "place": st.place, "card": vars(st.card),
+                          "pending": len(st.pending)}
+                      for n, st in rp.seats.items()},
+            "threads": rp.threads,
+            "scene": None if scene is None else {
+                "id": scene["id"], "day": scene["day"],
+                "place": scene["place"], "cast": scene["cast"],
+                "opening": scene["opening"],
+                "lighting": ((scene.get("refpack") or {})
+                             .get("lighting", {}).get("报告", "")),
+                "skyline": (scene.get("refpack") or {}).get(
+                    "skyline_report", [])},
+            "scenes_total": len(rp.scenes),
+            "ai": rp.pool is not None}
+
+
+@app.get("/api/sessions/{sid}/rp/entries")
+def rp_entries(sid: str, viewer: str):
+    """Stage flow filtered SERVER-SIDE: inner layers only for their owner."""
+    rp = _rp(_session(sid))
+    scene = rp.current_scene() or (rp.scenes[-1] if rp.scenes else None)
+    if scene is None:
+        return {"entries": []}
+    out = [e for e in scene["entries"]
+           if e["layer"] != "inner" or e["seat"] == viewer]
+    return {"scene": scene["id"], "status": scene["status"], "entries": out}
+
+
+@app.get("/api/sessions/{sid}/rp/feed/{seat}")
+def rp_feed(sid: str, seat: str):
+    rp = _rp(_session(sid))
+    return {"feed": rp.seats[seat].feed[-40:]}
+
+
+@app.post("/api/sessions/{sid}/rp/scene/open")
+async def rp_scene_open(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    scene = rp.open_scene(tuple(body["place"]), body["cast"], body["opening"],
+                          day=body.get("day"))
+    return {"id": scene["id"], "day": scene["day"],
+            "lighting": ((scene.get("refpack") or {})
+                         .get("lighting", {}).get("报告", ""))}
+
+
+@app.post("/api/sessions/{sid}/rp/scene/close")
+async def rp_scene_close(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    settle = rp.close_scene(float(body.get("elapsed_days", 0.5)),
+                            events=body.get("events", []),
+                            deltas=body.get("deltas", {}),
+                            summary=body.get("summary", ""))
+    return settle
+
+
+@app.post("/api/sessions/{sid}/rp/say")
+async def rp_say(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    return rp.say(body["seat"], body["layer"], body["text"])
+
+
+@app.post("/api/sessions/{sid}/rp/suggest")
+async def rp_suggest(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    return rp.suggest(body["seat"])
+
+
+@app.post("/api/sessions/{sid}/rp/move")
+async def rp_move(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    return rp.move(body["seat"], tuple(body["dest"]),
+                   float(body["days"]), body.get("mode", "horse"))
+
+
+@app.post("/api/sessions/{sid}/rp/thread")
+async def rp_thread(sid: str, request: Request):
+    body = await request.json()
+    rp = _rp(_session(sid))
+    if body.get("pay"):
+        rp.pay_thread(int(body["pay"]))
+        return {"ok": True}
+    return rp.plant_thread(body["desc"])
+
+
+@app.get("/api/sessions/{sid}/rp/refpack.png")
+def rp_refpack_png(sid: str, kind: str = "minimap",
+                   lon: float | None = None, lat: float | None = None):
+    s = _session(sid)
+    rp = _rp(s)
+    import refpack as refpack_mod
+    scene = rp.current_scene() or (rp.scenes[-1] if rp.scenes else None)
+    if lon is None or lat is None:
+        if scene is None:
+            raise HTTPException(409, "no scene")
+        lon, lat = scene["place"]
+    if kind == "minimap":
+        png = refpack_mod.minimap_png(s, lon, lat)
+    else:
+        sky = rp.obs.sky(lat, lon, rp.clock + 0.75)
+        png = refpack_mod.skydome_png(sky)
+    return Response(content=png, media_type="image/png")
+
+
+@app.get("/api/sessions/{sid}/rp/transcript")
+def rp_transcript(sid: str):
+    rp = _rp(_session(sid))
+    return Response(content=rp.transcript_jsonl(),
+                    media_type="application/jsonl; charset=utf-8")
+
+
+@app.post("/api/sessions/{sid}/rp/novelize")
+async def rp_novelize(sid: str, request: Request):
+    body = await request.json()
+    s = _session(sid)
+    rp = _rp(s)
+    import novelize as novelize_mod
+    out_dir = WORLDS_DIR / "novelized" / s.id
+    paths = novelize_mod.novelize(rp.transcript, body["pov"], rp.pool,
+                                  out_dir)
+    return {"chapters": [p.read_text(encoding="utf-8") for p in paths]}
+
+
+RP_UI_DIR = REPO / "ui" / "rp"
+
+
+@app.get("/rp")
+def rp_index():
+    return HTMLResponse((RP_UI_DIR / "index.html").read_text(encoding="utf-8"))
+
+
 @app.get("/")
 def index():
     return HTMLResponse((UI_DIR / "index.html").read_text(encoding="utf-8"))
 
 
 app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
+app.mount("/rpstatic", StaticFiles(directory=str(RP_UI_DIR)), name="rpstatic")

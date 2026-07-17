@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>WorldEngine · RP 工作室</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #14161c; color: #d8dbe2;
+         font: 13px/1.5 "Segoe UI", system-ui, sans-serif; }
+  #topbar { display: flex; gap: 12px; align-items: center; padding: 8px 14px;
+            background: #1c1f27; border-bottom: 1px solid #2a2e3a; }
+  #topbar b { color: #8fd0ff; }
+  #main { display: grid; grid-template-columns: 250px 1fr 330px;
+          height: calc(100vh - 42px); }
+  .col { overflow-y: auto; padding: 10px; }
+  #left { border-right: 1px solid #2a2e3a; }
+  #right { border-left: 1px solid #2a2e3a; }
+  h3 { margin: 10px 0 6px; font-size: 12px; color: #9aa3b5;
+       text-transform: uppercase; letter-spacing: .08em; }
+  .seat { padding: 6px 8px; margin: 3px 0; background: #1d212b;
+          border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  .seat.active { border-color: #8fd0ff; }
+  .seat small { color: #6f7890; }
+  input, select, textarea, button {
+    background: #232734; color: #d8dbe2; border: 1px solid #333a4c;
+    border-radius: 5px; padding: 5px 7px; font: inherit; }
+  button { cursor: pointer; background: #2b3040; }
+  button:hover { background: #38405a; }
+  button.primary { background: #2b5f9e; }
+  .row { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 60px; }
+  #scene-info { background: #1d212b; padding: 10px; border-radius: 8px;
+                margin-bottom: 8px; white-space: pre-wrap; }
+  #scene-info .light { color: #b9a86a; font-size: 12px; }
+  #entries { display: flex; flex-direction: column; gap: 6px; }
+  .entry { padding: 7px 10px; border-radius: 8px; background: #1d212b;
+           max-width: 88%; }
+  .entry .who { color: #8fd0ff; font-weight: 600; margin-right: 6px; }
+  .entry.action { font-style: italic; color: #b9c2d4; }
+  .entry.inner { background: #241d2e; color: #c9a9e8;
+                 border: 1px dashed #5a4a75; }
+  .entry.inner::before { content: "内心 "; font-size: 11px; color: #8a6ab0; }
+  .entry.narration { background: #182230; color: #9db8d6; max-width: 100%; }
+  .entry .note { display: block; color: #d0906a; font-size: 11px; }
+  #composer { position: sticky; bottom: 0; background: #14161c;
+              padding-top: 8px; }
+  #say-text { width: 100%; min-height: 54px; }
+  img.ref { width: 100%; border-radius: 8px; margin: 4px 0;
+            border: 1px solid #2a2e3a; }
+  .thread { padding: 4px 6px; margin: 2px 0; background: #1d212b;
+            border-radius: 5px; display: flex; justify-content: space-between; }
+  .thread.paid { opacity: .45; text-decoration: line-through; }
+  .feed-item { font-size: 12px; color: #a7b0c3; margin: 3px 0;
+               border-left: 2px solid #333a4c; padding-left: 6px; }
+  #boot { padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <b>RP 工作室</b>
+  <span>视角 <select id="viewer-select"></select></span>
+  <span>时钟 <span id="clock">—</span></span>
+  <span id="ai-badge"></span>
+  <span id="status" style="margin-left:auto;color:#6f7890"></span>
+</div>
+<div id="boot" hidden>
+  <p>未初始化。需要一个已生成世界的会话（?sid=…），然后：</p>
+  <label><input type="checkbox" id="use-ai"> 启用 AI 座席</label>
+  <button id="rp-init-btn" class="primary">初始化 RP</button>
+</div>
+<div id="main" hidden>
+  <div class="col" id="left">
+    <h3>座席</h3>
+    <div id="seats-list"></div>
+    <div class="row">
+      <input id="seat-name" placeholder="名字">
+      <select id="seat-kind"><option value="actor">角色</option>
+        <option value="kp">KP</option></select>
+    </div>
+    <div class="row">
+      <select id="seat-auto"><option value="manual">manual</option>
+        <option value="assist">assist</option>
+        <option value="auto">auto</option></select>
+      <button id="seat-add">添加座席</button>
+    </div>
+    <h3>状态卡（当前视角）</h3>
+    <div id="statecard" style="white-space:pre-wrap;font-size:12px"></div>
+    <h3>所知流</h3>
+    <div id="feed-list"></div>
+  </div>
+  <div class="col" id="center">
+    <div id="scene-info">（无场景）</div>
+    <div id="entries"></div>
+    <div id="composer">
+      <div class="row">
+        <select id="layer-select" style="flex:0 0 90px">
+          <option value="dialogue">台词</option>
+          <option value="action">行动</option>
+          <option value="inner">内心</option>
+          <option value="narration">旁白</option>
+        </select>
+        <button id="say-btn" class="primary" style="flex:0 0 80px">发言</button>
+        <button id="suggest-btn" style="flex:0 0 90px">AI 建议</button>
+      </div>
+      <textarea id="say-text" placeholder="以当前视角发言……"></textarea>
+    </div>
+  </div>
+  <div class="col" id="right">
+    <h3>开场景</h3>
+    <div class="row"><input id="sc-lon" placeholder="经度">
+      <input id="sc-lat" placeholder="纬度"></div>
+    <input id="sc-cast" placeholder="在场者（逗号分隔）" style="width:100%">
+    <textarea id="sc-opening" placeholder="开场描述" style="width:100%"></textarea>
+    <div class="row"><input id="sc-day" placeholder="日（可空）">
+      <button id="sc-open-btn" class="primary">开场</button></div>
+    <h3>关场景 / 结算</h3>
+    <div class="row"><input id="sc-elapsed" placeholder="历时(天)" value="0.5">
+      <select id="sc-vis"><option value="cast">仅在场</option>
+        <option value="public">公开(驿路分发)</option></select></div>
+    <input id="sc-event" placeholder="正典事件描述（可空）" style="width:100%">
+    <div class="row"><input id="sc-summary" placeholder="小结">
+      <button id="sc-close-btn">关场结算</button></div>
+    <h3>线头账本</h3>
+    <div id="threads-list"></div>
+    <div class="row"><input id="thread-desc" placeholder="新线头">
+      <button id="thread-add">埋设</button></div>
+    <h3>渲染参考</h3>
+    <img id="minimap-img" class="ref" alt="minimap" hidden>
+    <img id="skydome-img" class="ref" alt="skydome" hidden>
+  </div>
+</div>
+<script src="/rpstatic/rp.js"></script>
+</body>
+</html>

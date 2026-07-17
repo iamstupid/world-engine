@@ -536,3 +536,12 @@ ledger, author sovereignty via staged changesets), refpack (skyline/
 minimap/skydome/lighting), imagegen (openai-image + gemini-image,
 render-guided). Demo: tools/scripts/rp_demo.py. Next: RP-3 multi-panel
 web UI (Playwright-verified), RP-4 novelize from transcripts.
+
+### Status update (2026-07-17h): RP-3 + RP-4 IMPLEMENTED
+
+/rp/* endpoints (server-side inner-layer isolation), ui/rp three-panel
+studio (viewer switching, layer-styled stage flow, KP tools, reference
+images), novelize.py (POV material bundles -> novelist chapters; CLI +
+/rp/novelize). e2e rp studio 5/5 incl. isolation-through-UI gate;
+demo transcript novelized by sol with moon phases matching the ephemeris.
+The full loop is live: world -> controlled RP -> transcript -> prose.

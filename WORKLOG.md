@@ -379,3 +379,26 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   rejected (needs 7); public event reached the off-stage scholar 3.7
   days later by courier; scene art generated via gpt-image-2.
 - Tests: tests/py 71/71 (llmpool 5, rpkit 9, refpack/imagegen 6 added).
+
+---
+
+# RP-3 + RP-4: multi-panel RP studio and transcript novelization
+
+## Date: 2026-07-17
+
+- /rp/* endpoints: init (binds world + astro + refpack + novelkit project),
+  seats, scene open/close, three-layer say, suggest, move, threads, feeds,
+  transcript, refpack PNGs, novelize. Inner-layer isolation is enforced
+  SERVER-SIDE (/rp/entries?viewer=...) — the UI merely renders.
+- ui/rp: three-panel studio (seats + state card + knowledge feed | stage
+  flow with layer-styled entries + composer | KP tools: scene forms,
+  thread ledger, minimap/skydome reference images). Viewer switcher
+  re-fetches the server-filtered stage flow.
+- novelize.py (RP-4): chapterize() builds POV material bundles from the
+  transcript — other seats' inner layers are excluded by construction,
+  courier-delayed news lands in the right chapter; novelize() drives the
+  pool's novelist role with hard rules and validation. CLI included.
+- e2e tests/e2e/test_rp_studio.py 5/5: panels render with simulated
+  lighting, three-layer posting, INNER INVISIBLE FROM THE OTHER VIEWER
+  (isolation observed through the real UI), KP threads + settle,
+  reference images render. Studio e2e still 8/8; tests/py 74/74.
