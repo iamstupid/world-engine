@@ -232,3 +232,108 @@ FTS5 for search; embeddings optional later for semantic recall. LLM assists
 Suggested immediate next step: M7 kernel plumbing (progress callback, schema
 export, C ABI) — it unblocks both the server and the editing story, and it
 is pure engine work in the codebase we just stabilized.
+
+---
+
+## Addendum (2026-07-17b): canonical IGM storage, high-res, topologies, project model
+
+Decisions from design review; these refine M7+ scopes.
+
+### Canonical storage: rhombus-atlas IGM, equirect demoted to export
+
+- 10 rhombi (north k: pole,V_k,W_k,V_k+1; south k: V_k+1,W_k,pole,W_k+1) of
+  N x N cells + 2 pole cells = 10N^2+2 exactly: the atlas is dense with zero
+  waste. Ring layout (CPU sim / neighbor code) <-> rhombus layout (storage,
+  GPU textures, chunking) are two indexings of the same cells; conversion is
+  pure index math (add to GeodesicGrid).
+- Atlas needs 1-texel gutters per rhombus for filtering (~0.1% at N=2048)
+  and separate pole values. Pipeline stages exchange cell buffers directly;
+  the equirect raster is produced only by an export stage.
+- `.weworld` layers: chunked per rhombus (256^2 chunks), mip pyramid,
+  u16 quantization + intra-rhombus prediction + zstd for elevation
+  (~20-40 MB/layer at N=2048 vs 168 MB raw f32); virtual-texture streaming
+  (view-driven chunk fetch) for the client.
+
+### High-resolution pipeline (target N=2048, ~3.9 km equatorial edge)
+
+- Prefer N=2048 over 2000: power-of-two alignment for multigrid nesting,
+  chunks and mips (8x8 chunks of 256^2 per rhombus).
+- Variable-precision generation: tectonics at F=500 (large-scale physics has
+  no information below ~500 km anyway) -> amplification upsample to 2048
+  with detail noise MODULATED BY crust attributes (anisotropic ridged noise
+  along fold directions on young orogens, subdued noise on old shields,
+  age-banded transform-fault noise on ocean floor) -> dense hydro/erosion at
+  full resolution (extrapolated ~40-60 s CPU; GPU compute later).
+- Coastline naturalization (three orthogonal fixes):
+  1. more octaves + domain warp in the crust seed noise (fractal crust
+     boundary);
+  2. combine-stage coastline displacement noise, amplitude decaying with
+     |z - sea| (fractalizes the sea-level contour only);
+  3. drowned-valley flooding order: erode with lowstand outlets (sea -120 m),
+     then flood to 0 -> rias, fjords, estuaries, shelf archipelagos.
+     Later: coastal-process stage (wave erosion, deltas).
+
+### World topologies
+
+`WorldDomain` interface = cell graph (adjacency/areas/edge lengths/3D
+embedding) + planetary context (insolation parameter, gravity direction, sky
+model). The M6 migration made erosion/hydrology/masks graph-native, so they
+run on any topology; climate advection likewise. Tectonics remains a
+sphere-only macro-terrain source; other topologies use authored + noise
+macro terrain.
+
+- Sphere: geodesic grid (full pipeline incl. tectonics).
+- Plane/"位面": bounded square grid; authored sun path.
+- Torus: doubly-wrapped rectangular grid (intrinsically flat, uniform).
+- Halo ring: narrow band, one wrap axis; day/night via shadow geometry.
+- O'Neill cylinder: circumferential wrap, sun-line lighting, Coriolis-driven
+  climate.
+
+Sky model per world: star catalog (procedural + nameable), rotation/orbit
+elements, moons, bound to the world calendar. Query
+`sky(observer, datetime)` -> sun/moon/planet positions, phases, eclipses,
+constellation visibility; renders in the globe viewer and a planetarium
+view; astronomical events feed the timeline (festivals, omens, moonlight
+conditions). Non-spherical skies are topology-aware (Halo arch, cylinder
+opposite-side vista).
+
+### Project model and story-state
+
+- Project = root unit. Children: Worlds[] (domain snapshots + geo DB + sky +
+  calendars), shared entity stores, Stories[].
+- Canon = base world + ordered changesets committed at story-calendar dates
+  (the existing validity-interval machinery); one world serves many stories;
+  named branches for AU/parallel canon later (git-for-world-state, linear
+  canon first).
+- Entity kinds (beyond geography): organizations (sects/guilds/churches/
+  houses), power systems (cultivation realm ladders / magic systems / tech
+  trees - one DAG-with-rules schema serves all three), items/artifacts with
+  custody chains, species/bestiary, languages/naming, religions/pantheons,
+  calendars/festivals, laws/customs per culture region, economy (currencies,
+  goods, trade routes), information/rumors, event hierarchy, and story-side
+  plot devices: foreshadowing tracker (plant/payoff pairs with unresolved
+  warnings).
+
+### Agentic workspace
+
+- All AI writes go to STAGING changesets; the author reviews diffs before
+  canon merge; AI-generated provenance tags everywhere.
+- Tool surface: geo queries (describe/route/reachable/viewshed), entity
+  CRUD, timeline, sky, calculators, combat simulator, canon RAG search.
+- New novelist-facing queries: `viewshed(point)` ("what can be seen") and
+  `news_arrival(event, place)` - earliest information arrival via route()
+  travel times per era infrastructure, auto-feeding character knowledge
+  ledgers ("能听到的消息" as a consistency check).
+- Combat simulation: power-system rules as data + deterministic seeded
+  resolver + Monte Carlo win-rate + per-round log for prose adaptation.
+- Fact checking: canon RAG + physics estimation tools.
+
+### Milestone impact
+
+- M7 gains: rhombus-atlas cell-buffer persistence in `.weworld`, ring<->
+  rhombus index conversion, export-only equirect stage.
+- M8 globe renders from the rhombus atlas (virtual texture path).
+- M9 adds amplification (attribute-modulated detail upsample) and the three
+  coastline fixes.
+- M12+ entity schema per the expanded kind list; sky model lands with M13
+  queries; agentic workspace is M14+ alongside the editor.
