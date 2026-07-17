@@ -257,3 +257,44 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   equatorial views) with limb shading - human-viewable exports without the
   web studio.
 - tests/py: 22 passing.
+
+---
+
+# Full Astronomy Model (absorbs skymodel v1)
+
+## Date: 2026-07-17
+
+- astro.py: seeded Universe -> galaxy of ~5000 star systems with real 3D
+  positions (pc): spiral (log-spiral arms + bulge/disc/halo), cluster
+  (King profile rejection sampling) and irregular generators; two-tier
+  sampling (full-IMF local neighborhood within 70 pc + luminous field
+  skeleton). Stellar physics from Kroupa IMF mass: L/R/T via main-sequence
+  relations, M_bol -> M_V via Reed-style bolometric correction (sun-like
+  check lands at Mv 4.82 vs real 4.83), spectral class, blackbody sRGB
+  tint from a committed LUT (tools/scripts/gen_blackbody_lut.py; Wyman 2013
+  analytic CIE CMFs - colour-science is numpy-2-only, incompatible with
+  our scipy stack).
+- Home system: Kepler orbits (Newton solver) for 4-8 planets; home planet
+  period == calendar year by construction (a from Kepler III); reflected-
+  light apparent magnitudes (Venus-like anchor peaks at -4); geocentric
+  conjunction scanning. Moons keep v1 circular model -> phases, eclipse
+  scanner; the default 5-deg lunar inclination now produces natural
+  eclipse SEASONS (~176 d apart) instead of monthly eclipses.
+- Constellations are home-culture-fixed memberships (MST shapes); viewed
+  from another system their shapes distort (cross-system parallax: nearest
+  system sees ~11x the angular shift for near vs far stars) - the
+  interstellar-fiction feature.
+- Server: /sky and /eclipses now served by the Observatory (superset
+  response: + planets with mags/phase angles, + naked-eye stars with RGB);
+  new /astro/spec (PUT overrides, persisted in .weworld meta),
+  /astro/galaxy, /astro/system/{idx}, /astro/sky_from?system= (foreign-sky
+  parallax view), /astro/events (eclipses + conjunctions). Naked-eye
+  systems + home planets/moons register through WorldStore.apply_generation
+  so author renames survive regeneration and show in the galaxy map.
+- worldstore fix: apply_generation retirement is now scoped to the kinds
+  present in the batch - previously a second generator (astro) would have
+  retired ALL of civ's entities and vice versa.
+- skymodel.py deleted; its 7 behavior gates ported into
+  tests/py/test_astro.py (20 gates total: Kepler residual/closure/third
+  law, IMF, LUT monotonicity, catalogs, parallax, galaxy morphology,
+  store merge isolation). tests/py 35/35, e2e 8/8.

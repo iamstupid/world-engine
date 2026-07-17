@@ -49,6 +49,8 @@ class Session:
         self.paint: dict[str, bytes] = {}  # M10 override layers (raw f32)
         self.store = WorldStore()          # M12 entity store
         self.geo = None                    # M13 query index (lazy)
+        self.astro_spec: dict = {}         # astronomy overrides (persisted)
+        self.astro = None                  # (Universe, Observatory), lazy
 
     def running(self) -> bool:
         return self.job is not None and self.job.is_alive()
@@ -74,7 +76,10 @@ app = FastAPI(title="WorldEngine Terrain Server")
 
 def _push(session: Session, event: dict):
     if session.loop is not None:
-        session.loop.call_soon_threadsafe(session.queue.put_nowait, event)
+        try:
+            session.loop.call_soon_threadsafe(session.queue.put_nowait, event)
+        except RuntimeError:
+            pass  # loop closed (shutdown/test harness); don't kill the job
 
 
 def _run_generation(session: Session):
@@ -93,6 +98,7 @@ def _run_generation(session: Session):
                                     paint=paint)
         session.result = result
         session.geo = None
+        session.astro = None
         session.error = None
         try:
             import civ  # noqa: E402  (M11; optional at M7/M8 stage)
@@ -225,7 +231,7 @@ async def save_world(sid: str, request: Request):
     name = "".join(c for c in body.get("name", "world") if c.isalnum() or c in "-_")
     path = WORLDS_DIR / f"{name}.weworld"
     persistence.save_world(path, s.params, s.result, s.features, s.entities,
-                           store=s.store)
+                           store=s.store, astro_spec=s.astro_spec)
     return {"saved": path.name}
 
 
@@ -236,12 +242,15 @@ async def load_world(sid: str, request: Request):
     path = WORLDS_DIR / Path(body["name"]).name
     if not path.exists():
         raise HTTPException(404, "no such world")
-    params, result, features, entities, store = persistence.load_world(path)
+    params, result, features, entities, store, astro_spec = \
+        persistence.load_world(path)
     s.params, s.result = params, result
     s.features, s.entities = features, entities
     if store is not None:
         s.store = store
+    s.astro_spec = astro_spec or {}
     s.geo = None
+    s.astro = None
     return {"loaded": path.name, "layers": sorted(result["layers"].keys())}
 
 
@@ -340,22 +349,83 @@ def api_viewshed(sid: str, lat: float, lon: float):
     return _geo(_session(sid)).viewshed(lon, lat)
 
 
-@app.get("/api/sessions/{sid}/sky")
-def api_sky(sid: str, lat: float, lon: float, t: float):
-    s = _session(sid)
-    if not hasattr(s, "sky_model") or s.sky_model is None:
-        from skymodel import SkyModel, SkySpec
+# ---- astronomy (full model; absorbs skymodel v1) ----
+
+def _astro(s: Session):
+    if s.astro is None:
+        import astro
         seed = int(s.params.get("world.seed", 1337))
         year = s.store.calendar.year_days if s.store.calendar else 360.0
-        s.sky_model = SkyModel(SkySpec(seed=seed, year_days=float(year)))
-    return s.sky_model.sky(lat, lon, t)
+        universe, obs = astro.build_universe(seed, float(year), s.astro_spec)
+        s.astro = (universe, obs)
+        s.store.apply_generation(universe.store_records())
+    return s.astro
+
+
+def _store_named(s: Session, universe, kind: str, gen_key, default):
+    from worldstore import stable_id
+    return s.store.get(stable_id(kind, gen_key), "name", default=default)
+
+
+@app.get("/api/sessions/{sid}/sky")
+def api_sky(sid: str, lat: float, lon: float, t: float):
+    _, obs = _astro(_session(sid))
+    return obs.sky(lat, lon, t)
 
 
 @app.get("/api/sessions/{sid}/eclipses")
 def api_eclipses(sid: str, t0: float = 0.0, days: float = 360.0):
+    _, obs = _astro(_session(sid))
+    return {"eclipses": obs.find_eclipses(t0, min(days, 3600.0))}
+
+
+@app.put("/api/sessions/{sid}/astro/spec")
+async def api_astro_spec(sid: str, request: Request):
     s = _session(sid)
-    api_sky(sid, 0, 0, 0)  # ensure model
-    return {"eclipses": s.sky_model.find_eclipses(t0, min(days, 3600.0))}
+    s.astro_spec.update(await request.json())
+    s.astro = None
+    return {"ok": True, "spec": s.astro_spec}
+
+
+@app.get("/api/sessions/{sid}/astro/galaxy")
+def api_astro_galaxy(sid: str):
+    s = _session(sid)
+    universe, _ = _astro(s)
+    out = universe.galaxy_map()
+    for sys in out["systems"]:
+        if sys["name"] is not None:
+            sys["name"] = _store_named(s, universe, "star_system",
+                                       sys["id"], sys["name"])
+    return out
+
+
+@app.get("/api/sessions/{sid}/astro/system/{idx}")
+def api_astro_system(sid: str, idx: int):
+    s = _session(sid)
+    universe, _ = _astro(s)
+    out = universe.system_info(idx)
+    if out["name"] is not None:
+        out["name"] = _store_named(s, universe, "star_system", idx, out["name"])
+    for j, planet in enumerate(out.get("planets", [])):
+        planet["name"] = _store_named(s, universe, "planet", f"0:{j}",
+                                      planet["name"])
+    return out
+
+
+@app.get("/api/sessions/{sid}/astro/sky_from")
+def api_astro_sky_from(sid: str, system: int = 0):
+    universe, _ = _astro(_session(sid))
+    if not (0 <= system < universe.n_systems):
+        raise HTTPException(404, "no such system")
+    return universe.sky_from(system)
+
+
+@app.get("/api/sessions/{sid}/astro/events")
+def api_astro_events(sid: str, t0: float = 0.0, days: float = 360.0):
+    _, obs = _astro(_session(sid))
+    days = min(days, 3600.0)
+    return {"eclipses": obs.find_eclipses(t0, days),
+            "conjunctions": obs.conjunctions(t0, days)}
 
 
 @app.get("/")

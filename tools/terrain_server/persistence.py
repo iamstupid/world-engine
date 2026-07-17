@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS store_meta (k TEXT PRIMARY KEY, v TEXT);
 
 
 def save_world(path: Path, params: dict, result: dict, features: list | None = None,
-               entities: list | None = None, store=None) -> None:
+               entities: list | None = None, store=None,
+               astro_spec: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()
@@ -37,6 +38,9 @@ def save_world(path: Path, params: dict, result: dict, features: list | None = N
         con.executescript(SCHEMA)
         cctx = zstd.ZstdCompressor(level=6)
         con.execute("INSERT INTO meta VALUES ('params', ?)", (json.dumps(params),))
+        if astro_spec:
+            con.execute("INSERT INTO meta VALUES ('astro_spec', ?)",
+                        (json.dumps(astro_spec),))
         con.execute("INSERT INTO meta VALUES ('width', ?)", (str(result["width"]),))
         con.execute("INSERT INTO meta VALUES ('height', ?)", (str(result["height"]),))
         con.execute("INSERT INTO meta VALUES ('hash', ?)", (result.get("hash", ""),))
@@ -67,12 +71,14 @@ def save_world(path: Path, params: dict, result: dict, features: list | None = N
         con.close()
 
 
-def load_world(path: Path) -> tuple[dict, dict, list, list]:
+def load_world(path: Path):
+    """Returns (params, result, features, entities, store, astro_spec)."""
     con = sqlite3.connect(path)
     try:
         dctx = zstd.ZstdDecompressor()
         meta = dict(con.execute("SELECT k, v FROM meta"))
         params = json.loads(meta.get("params", "{}"))
+        astro_spec = json.loads(meta.get("astro_spec", "{}"))
         result = {
             "width": int(meta["width"]),
             "height": int(meta["height"]),
@@ -99,6 +105,6 @@ def load_world(path: Path) -> tuple[dict, dict, list, list]:
                                              meta.get("log", "[]"))
         except Exception:  # noqa: BLE001  (older files without store tables)
             store = None
-        return params, result, features, entities, store
+        return params, result, features, entities, store, astro_spec
     finally:
         con.close()

@@ -208,9 +208,12 @@ class WorldStore:
           - field lock: that field keeps its value
           - user attr entries always outrank refreshed gen entries
           - gen entities absent from the new batch are retired unless they
-            carry user data
+            carry user data — scoped to the kinds present in THIS batch, so
+            independent generators (civ, astro, ...) never retire each
+            other's entities
         """
         seen = set()
+        batch_kinds = {rec["kind"] for rec in records}
         created = updated = 0
         for rec in records:
             eid = stable_id(rec["kind"], rec["gen_key"], namespace)
@@ -231,8 +234,8 @@ class WorldStore:
                 self.set_attr(eid, "_retired", False, source=GEN)
         retired = 0
         for ent in self.entities.values():
-            if ent.id.split(":")[0] != "":  # all kinds
-                pass
+            if ent.kind not in batch_kinds:
+                continue
             is_gen = any(e.source == GEN for es in ent.attrs.values() for e in es)
             if (is_gen and ent.id not in seen and "*" not in ent.locked and
                     not ent.has_user_data() and

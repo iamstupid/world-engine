@@ -450,3 +450,52 @@ existing era/validity machinery.
 
 Style pack + optional hooks = the community mod format ("Song-dynasty water
 town pack", "steampunk industrial pack").
+
+---
+
+## Addendum (2026-07-17e): full astronomy model — IMPLEMENTED
+
+Worlds attach to a specific star. `tools/terrain_server/astro.py` owns the
+hierarchy **Galaxy → StarSystem (3D position, pc) → Star (mass-derived
+physics) → Planet (Kepler elements, AU) → Moon**, replacing skymodel v1
+(its behavior gates live on in `tests/py/test_astro.py`).
+
+### What is in
+
+- **Galaxy generators**: spiral (log-spiral arms, exponential disc, bulge,
+  halo), cluster (King profile), irregular (Gaussian blobs). Two-tier
+  sampling: full-IMF local neighborhood (2400 systems / 70 pc) around the
+  home system + a luminous field skeleton (2600) tracing galaxy shape.
+- **Stellar physics**: Kroupa IMF → mass → L (piecewise M-L), R, T_eff,
+  M_bol → M_V (Reed BC), spectral class, binaries as luminosity-summed
+  companions. Colors: blackbody T → sRGB LUT committed at
+  `tools/terrain_server/data/blackbody_lut.json` (generator script uses
+  analytic Wyman-2013 CIE CMFs; anchors match published blackbody tables
+  to a few 8-bit units).
+- **Home system**: Kepler two-body orbits (Newton solver), home planet
+  period locked to the world calendar year, planet types split at the
+  snow line, reflected-light magnitudes (validated Venus anchor ≈ −4),
+  moons with phases; eclipse scanning inherits v1 semantics and the
+  inclined default moon yields realistic eclipse seasons; planet-planet
+  conjunction scanning.
+- **Observer-dependent skies**: constellations are home-culture-fixed
+  memberships whose shapes recompute per observer system —
+  `/astro/sky_from?system=N` returns the distorted foreign sky
+  (cross-system parallax, ~11× near/far angular-shift ratio at the
+  nearest neighbor).
+- **Server**: `/sky`, `/eclipses` (Observatory-backed, superset shape),
+  `PUT /astro/spec` (overrides, persisted in `.weworld` meta),
+  `/astro/galaxy`, `/astro/system/{idx}`, `/astro/events`. Naked-eye
+  systems and home bodies are WorldStore entities (kinds `star_system` /
+  `planet` / `moon`) — renames survive regeneration.
+- **Store contract fix**: `apply_generation` retirement is scoped to the
+  batch's kinds so independent generators (civ / astro) cannot retire
+  each other's entities.
+
+### Deferred
+
+- Companion-star orbits & multi-star home systems (lighting/eclipse
+  effects on the home sky).
+- Proper motion over story time; galactic band rendering (client-side
+  from `/astro/galaxy`).
+- Star-chart UI (web-side; consumes `/astro/galaxy` + `/astro/sky_from`).
