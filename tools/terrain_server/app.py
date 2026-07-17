@@ -771,3 +771,8 @@ def index():
 
 app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
 app.mount("/rpstatic", StaticFiles(directory=str(RP_UI_DIR)), name="rpstatic")
+
+WORKBENCH_DIST = REPO / "ui" / "app" / "dist"
+if WORKBENCH_DIST.exists():
+    app.mount("/app", StaticFiles(directory=str(WORKBENCH_DIST), html=True),
+              name="workbench")

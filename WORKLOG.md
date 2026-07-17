@@ -402,3 +402,29 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   lighting, three-layer posting, INNER INVISIBLE FROM THE OTHER VIEWER
   (isolation observed through the real UI), KP threads + settle,
   reference images render. Studio e2e still 8/8; tests/py 74/74.
+
+---
+
+# DAG Pipeline + Unified Workbench Skeleton
+
+## Date: 2026-07-18
+
+- Survey first (user directive): no reusable DAG lib fits (taskflow/tbb =
+  compile-time task graphs; graphtik/dask = no parameterized types); we
+  borrow the ComfyUI PATTERN — declarative registry, topo execution,
+  content-addressed cache — not its code. docs/PIPELINE_DAG_DESIGN.md.
+- C++ operators (IGM-ization): noise_cells evaluated on cell centers,
+  resample_cells (barycentric), rasterize_cells (equirect = export view),
+  tectonics stage persists canonical crust cell fields (tect_*), physics
+  gains run_geodesic_physics_stage_fields (z0/uplift as cell fields,
+  interpolated per multigrid level — no raster round trip).
+- graphdag.py executor: CellField(frequency) typed edges, HARD frequency
+  validation (no implicit resampling), blake2b per-node content cache
+  (edits recompute only the downstream cone), IGM-native default template
+  (combine in cell space). /api/graph/{schema,template} + validate/run.
+- ui/app: vite+React+TS workbench skeleton — dockview panels (native
+  Pipeline via React Flow; legacy studio + RP docked as iframes for
+  gradual migration), inspector param editing, one-click "insert
+  resample" fix for frequency-mismatch errors, SSE per-node progress.
+- Tests: tests/py 79 (graphdag 5), ctest 7/7, e2e 17/17 (workbench 4:
+  dock render, template DAG 6 nodes/6 edges, inspector, mismatch->fix).

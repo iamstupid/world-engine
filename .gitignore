@@ -11,3 +11,4 @@ worlds/
 tests/e2e/artifacts/
 __pycache__/
 .pytest_cache/
+ui/app/node_modules/
