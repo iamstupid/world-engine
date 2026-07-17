@@ -398,3 +398,55 @@ local DEM and the city co-adapt.
 - New M11.5: refinement pyramid (region tiles, boundary-conditioned local
   re-simulation, tributary synthesis).
 - New M15: city map generation (after civ layer + refinement pyramid).
+
+---
+
+## Addendum (2026-07-17d): era-styled city generation
+
+### Literature map (no turnkey paper; three usable bodies)
+
+1. Grammar line (style = rule corpus): Parish & Muller 2001 (L-system
+   roads); Muller et al. 2006 CGA shape grammars (CityEngine); proven on
+   historic reconstruction (procedural Pompeii, Rome Reborn); Vanegas et
+   al. 2012 parcel generation.
+2. Growth/time line (era = time slice of growth): Weber et al. 2009
+   "Interactive Geometric Simulation of 4D Cities" (closest prior art);
+   Emilien et al. 2012 village growth on terrain (pre-industrial forms);
+   agent-based land use (Lechner et al.); Venice Time Machine methodology.
+3. Urban morphology (the actual per-era parameters): Kostof (organic /
+   grid / baroque typology), Conzen school (burgage plot modules 6-10 m,
+   wall rings, fringe belts), Hakim (Islamic medina rules), and for Chinese
+   settings the lifang ward system -> Song street-market transition ->
+   courtyard modules — a ready-made style-pack sequence.
+   ML line (Neural Turtle Graphics 2019, CityDreamer 2024) not the main
+   path (weak style control, no semantic vectors), but inverse fitting of
+   style-pack parameters from real old-town OSM data (Vanegas 2012 inverse
+   design) is how packs get calibrated.
+
+### Model: palimpsest growth replay
+
+City = growth simulation replayed through the era sequence, one style pack
+per era. Old street skeletons persist across eras; wall rings, old town vs
+new districts, widened streets, abandoned quarters (declining eras) all
+emerge. `city_map(as_of=era)` = replay slice — plugs directly into the
+existing era/validity machinery.
+
+### Architecture: three exposure layers
+
+1. Engine (C++, not scriptable): site model, tensor-field solver,
+   street-graph/parcel geometry (CGAL/Clipper2), growth replay, entity
+   persistence.
+2. Style packs (declarative JSON/TOML): street pattern weights, block and
+   parcel modules, land-use rule tables, wall policy, building-grammar
+   selection, naming culture refs. Most era differences live HERE — data is
+   validatable, interpolatable between eras, and safely LLM-generatable.
+3. Script hooks (user's "mount JS"): embedded QuickJS sandbox (seeded RNG
+   injected; no Date/Math.random/IO; pure functions), plus a WASM channel
+   and server-side Python plugins. Hook surface: score_site,
+   tensor_contrib(pos), street_step_rule, parcel_split_policy(block),
+   assign_land_use(parcel), building_grammar(parcel), decorate_poi.
+   Precedent: CGA is itself a DSL — "style as script" is industry-validated;
+   we host generic JS/WASM instead of inventing a DSL.
+
+Style pack + optional hooks = the community mod format ("Song-dynasty water
+town pack", "steampunk industrial pack").
