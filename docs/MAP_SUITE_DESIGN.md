@@ -165,6 +165,24 @@ graph TD
 - 上层：**phase DAG**（新，批次 B 第一项基建）：节点 = 生成 phase（ecoregion、species、settle_era_k、cultures、polities、routes、各惰性物化…），执行 = 纯函数 (场快照, 实体快照, C 节点, seed) → apply_generation 批；phase hash = (代码版本, params, C hashes, 上游 phase hashes, 场 hashes)。脏传播跨层：场变 → 膜 → 标脏 phase → 提案。
 - 每个实体 kind 声明 **provenance 签名**（它读哪些场/phase/C 节点）。一张签名表同时驱动三件事：失效锥预告、AI 上下文自动圈选（§1.6 编辑某实体时该喂模型什么）、惰性节点的时间无关性审查（§1.7——签名里出现兄弟实体即违规，静态可查）。
 
+**⑥ 已钉参数（作者定，2026-07-18）与 phase 流程表。**
+
+- **纪元数：默认 4，上限软性 ~6，与 worldstore 纪元表合一。** 生成纪元即故事日历纪元（`add_era`），聚落实体带 `valid_from`=建城纪元起点——历史深度免费进入时间轴查询。纪元多的代价全是线性以上的：重算时间线性增长；**编辑放大**（纪元边只向前，改 era_1 失效其后全部纪元——纪元越多，早期编辑越接近全量重算）；diff 审查负担随批数增长；而结构收益递减（Emilien 正反馈跑 3–4 批后 Zipf/Christaller 结构已浮现）。纪元名/风味 AI 生成（C 节点）。
+- **cultures 与 polities 分开为两个 phase。** 文化扩散只读聚落+种群+地形；政体生长读文化输出（cultureCost 机制，§2.2 三层因果链）。分开使"只 reseed 政体、文化不动"成为合法作用域。
+- **区域掩膜 = IGM 球面多边形**（顶点为单位向量序列，C 节点，分辨率无关）。栅格化为指定频率的 cell 掩膜是一个可缓存 F 节点（球面 winding number 判内外）；跨频率 resample、重锚定天然稳健；编辑=矢量顶点操作或 NL→geoquery 重圈选。生态区 id 列表、cell 集合都可在导入时转为多边形（取连通域边界）。
+
+| # | phase | 读（场/实体） | 读 C | 写 | 档 |
+|---|-------|------|------|-----|-----|
+| 1 | ecoregion | cell_biome + S0 场 | 命名风格 | 生态区实体 + cell_ecoregion (D) | 即时 |
+| 2 | species | S0 场 | 种群包 filter + 区域掩膜 | 各种群 suitability 场 (F) | 即时 |
+| 3 | settle_era_k (k=1..E) | suitability + accessibility_{k-1} | place_constraint | 聚落批 k + 道路 k + accessibility_k (D) | 即时 |
+| 4 | hierarchy_pop | 全纪元聚落 | — | 层级/人口 (Zipf/Christaller) | 即时 |
+| 5 | cultures | 顶级聚落 hearth + 种群 + 地形 | 文化风格 | 文化实体 + cell_culture (D) | 即时 |
+| 6 | polities | 首都 + cell_culture + 地形成本 | 边界约束 | 政体实体 + cell_polity + 边境折线 | 即时 |
+| 7 | routes_trunk | 人口 + 政体 | — | 干线路网实体 (gravity 定级) | 即时 |
+| 8 | provinces / religions / diplomacy / wars | 政体 + 聚落 | 各风格包 | S3 叙事实体 | 半惰性 |
+| 9 | sect / city_detail / dem_patch / layout_L2L3 / prose | 实体正典 + S0 场 | 风格包 | S4 局部内容 | 全惰性（§1.7） |
+
 ---
 
 ## 2. 聚落生成设计（核心章节）
