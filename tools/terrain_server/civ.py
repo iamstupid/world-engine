@@ -242,17 +242,64 @@ def generate_civilization(session) -> None:
                          "locked": False,
                          "provenance": {"seed": seed, "generator": "civ-v1"}})
 
-    # ---- borders (land edges between different polities) ----
+    # ---- borders: proper dual-edge polylines ----
+    # The dual edge separating cells (i, j) connects the centroids of the two
+    # lattice triangles sharing edge (i, j), i.e. (i, j, k) for the two common
+    # neighbors k. Segments are chained into LineStrings by endpoint matching.
     pol_r = polity_of[rows]
     pol_c = polity_of[cols]
     bmask = (pol_r != pol_c) & land[rows] & land[cols] & (rows < cols)
-    mids = centers[rows[bmask]] + centers[cols[bmask]]
-    mids /= np.linalg.norm(mids, axis=1, keepdims=True)
-    blon = np.degrees(np.arctan2(mids[:, 2], mids[:, 0]))
-    blat = np.degrees(np.arcsin(np.clip(mids[:, 1], -1, 1)))
-    coords = np.stack([blon, blat], axis=1).round(3).tolist()
-    if coords:
-        features.append(feature("border", {"type": "MultiPoint", "coordinates": coords}, {}))
+    involved = set(int(x) for x in rows[bmask]) | set(int(x) for x in cols[bmask])
+    nb_sets = {i: set(int(x) for x in nb[i] if x >= 0) for i in involved}
+    segments = []
+    for i, j in zip(rows[bmask], cols[bmask]):
+        common = nb_sets[int(i)] & nb_sets[int(j)]
+        if len(common) < 2:
+            continue
+        ks = sorted(common)[:2]
+        pts = []
+        for k in ks:
+            c = centers[i] + centers[j] + centers[k]
+            c = c / np.linalg.norm(c)
+            pts.append((round(math.degrees(math.atan2(c[2], c[0])), 3),
+                        round(math.degrees(math.asin(min(1, max(-1, c[1])))), 3)))
+        if pts[0] != pts[1]:
+            segments.append((pts[0], pts[1]))
+    # chain segments into polylines
+    adj = {}
+    for a, b in segments:
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    seg_set = {frozenset(s) for s in segments}
+    used = set()
+    for a, b in segments:
+        if frozenset((a, b)) in used:
+            continue
+        line = [a, b]
+        used.add(frozenset((a, b)))
+        for _ in range(4000):  # extend forward
+            tail = line[-1]
+            nxt = [q for q in adj.get(tail, [])
+                   if frozenset((tail, q)) in seg_set and
+                   frozenset((tail, q)) not in used]
+            if not nxt:
+                break
+            line.append(nxt[0])
+            used.add(frozenset((tail, nxt[0])))
+        for _ in range(4000):  # extend backward
+            head = line[0]
+            nxt = [q for q in adj.get(head, [])
+                   if frozenset((head, q)) in seg_set and
+                   frozenset((head, q)) not in used]
+            if not nxt:
+                break
+            line.insert(0, nxt[0])
+            used.add(frozenset((head, nxt[0])))
+        if len(line) >= 3:
+            features.append(feature(
+                "border",
+                {"type": "LineString", "coordinates": [[p[0], p[1]] for p in line]},
+                {}))
 
     # ---- roads: MST over top settlements, least-cost paths ----
     road_mask = np.zeros(n, np.float32)

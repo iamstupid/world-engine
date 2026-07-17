@@ -121,6 +121,14 @@ def test_viewshed(session, geo):
     assert v["horizon_km_median"] > 0
 
 
+def test_borders_are_polylines(session):
+    borders = [f for f in session.features if f["kind"] == "border"]
+    assert borders, "no border features"
+    assert all(f["geometry"]["type"] == "LineString" for f in borders)
+    lengths = [len(f["geometry"]["coordinates"]) for f in borders]
+    assert max(lengths) >= 8  # chained runs, not single segments
+
+
 def test_civ_store_regeneration_merge(session):
     setts = session.store.find("settlement")
     target = setts[0]

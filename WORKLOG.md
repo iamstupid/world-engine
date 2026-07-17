@@ -237,3 +237,23 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
 - Tests: tests/py 14/14 (store semantics, calendars, merge protection,
   route/describe/news/viewshed gates, end-to-end regen-merge); e2e 8/8
   unchanged.
+
+---
+
+# Sky Model, Border Polylines, Ortho Views
+
+## Date: 2026-07-17
+
+- skymodel.py: seeded star catalog (1400 stars, named constellations),
+  rotation/tilt/orbit frames, sky(observer, t) -> sun alt/az + day/twilight/
+  night, moon positions/phases/moonlight, visible constellations; eclipse
+  scanner (solar/lunar). Endpoints /sky and /eclipses; year length follows
+  the world calendar. Tests: determinism, day/night cycle, phase range,
+  eclipse detection, diurnal constellation rotation, midnight sun at 85N.
+- civ borders upgraded from midpoint dots to proper DUAL-EDGE polylines
+  (segments connect centroids of the two lattice triangles sharing each
+  boundary edge, chained into LineStrings).
+- terrain_cli --ortho-views: orthographic globe snapshots (both poles + two
+  equatorial views) with limb shading - human-viewable exports without the
+  web studio.
+- tests/py: 22 passing.

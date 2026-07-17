@@ -340,6 +340,24 @@ def api_viewshed(sid: str, lat: float, lon: float):
     return _geo(_session(sid)).viewshed(lon, lat)
 
 
+@app.get("/api/sessions/{sid}/sky")
+def api_sky(sid: str, lat: float, lon: float, t: float):
+    s = _session(sid)
+    if not hasattr(s, "sky_model") or s.sky_model is None:
+        from skymodel import SkyModel, SkySpec
+        seed = int(s.params.get("world.seed", 1337))
+        year = s.store.calendar.year_days if s.store.calendar else 360.0
+        s.sky_model = SkyModel(SkySpec(seed=seed, year_days=float(year)))
+    return s.sky_model.sky(lat, lon, t)
+
+
+@app.get("/api/sessions/{sid}/eclipses")
+def api_eclipses(sid: str, t0: float = 0.0, days: float = 360.0):
+    s = _session(sid)
+    api_sky(sid, 0, 0, 0)  # ensure model
+    return {"eclipses": s.sky_model.find_eclipses(t0, min(days, 3600.0))}
+
+
 @app.get("/")
 def index():
     return HTMLResponse((UI_DIR / "index.html").read_text(encoding="utf-8"))

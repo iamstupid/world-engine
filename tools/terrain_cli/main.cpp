@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -29,19 +30,9 @@ Rgb lerp_rgb(const Rgb& a, const Rgb& b, float t) {
   return {blend(a.r, b.r), blend(a.g, b.g), blend(a.b, b.b)};
 }
 
-bool write_png8_elevation_color(const std::string& path, const std::vector<float>& data, int w, int h,
-                                float sea_level_m) {
-  if (data.empty() || w <= 0 || h <= 0) {
-    return false;
-  }
-
-  // Use absolute elevation references for consistent, informative visualization.
-  // Ocean: sea_level down to -6000m (deep blue)
-  // Land:  sea_level to 200m (dark green), 200-800m (green-yellow),
-  //        800-2000m (yellow-red), 2000-4000m (red-purple), 4000m+ (purple-white)
+Rgb elevation_rgb(float z, float sea_level_m) {
   const float ocean_floor = -6000.0f;
   const float below_span = std::max(1e-6f, sea_level_m - ocean_floor);
-
   const Rgb shallow_blue{70, 150, 245};
   const Rgb mid_blue{30, 80, 180};
   const Rgb deep_blue{5, 15, 80};
@@ -52,35 +43,41 @@ bool write_png8_elevation_color(const std::string& path, const std::vector<float
   const Rgb red{190, 50, 30};
   const Rgb purple{140, 60, 170};
   const Rgb white{255, 255, 255};
+  if (z < sea_level_m) {
+    const float depth = sea_level_m - z;
+    if (depth < 200.0f) {
+      return lerp_rgb(shallow_blue, mid_blue, depth / 200.0f);
+    }
+    const float t = std::clamp((depth - 200.0f) / (below_span - 200.0f), 0.0f, 1.0f);
+    return lerp_rgb(mid_blue, deep_blue, t);
+  }
+  const float elev = z - sea_level_m;
+  if (elev < 200.0f) {
+    return lerp_rgb(dark_green, green, elev / 200.0f);
+  }
+  if (elev < 800.0f) {
+    return lerp_rgb(green, yellow, (elev - 200.0f) / 600.0f);
+  }
+  if (elev < 2000.0f) {
+    return lerp_rgb(yellow, orange, (elev - 800.0f) / 1200.0f);
+  }
+  if (elev < 4000.0f) {
+    return lerp_rgb(orange, red, (elev - 2000.0f) / 2000.0f);
+  }
+  if (elev < 6000.0f) {
+    return lerp_rgb(red, purple, (elev - 4000.0f) / 2000.0f);
+  }
+  return lerp_rgb(purple, white, std::clamp((elev - 6000.0f) / 3000.0f, 0.0f, 1.0f));
+}
 
+bool write_png8_elevation_color(const std::string& path, const std::vector<float>& data, int w, int h,
+                                float sea_level_m) {
+  if (data.empty() || w <= 0 || h <= 0) {
+    return false;
+  }
   std::vector<unsigned char> raw(static_cast<size_t>(w) * static_cast<size_t>(h) * 3u, 0);
   for (int i = 0; i < w * h; ++i) {
-    const float z = data[i];
-    Rgb c{};
-    if (z < sea_level_m) {
-      const float depth = sea_level_m - z;
-      if (depth < 200.0f) {
-        c = lerp_rgb(shallow_blue, mid_blue, depth / 200.0f);
-      } else {
-        const float t = std::clamp((depth - 200.0f) / (below_span - 200.0f), 0.0f, 1.0f);
-        c = lerp_rgb(mid_blue, deep_blue, t);
-      }
-    } else {
-      const float elev = z - sea_level_m;
-      if (elev < 200.0f) {
-        c = lerp_rgb(dark_green, green, elev / 200.0f);
-      } else if (elev < 800.0f) {
-        c = lerp_rgb(green, yellow, (elev - 200.0f) / 600.0f);
-      } else if (elev < 2000.0f) {
-        c = lerp_rgb(yellow, orange, (elev - 800.0f) / 1200.0f);
-      } else if (elev < 4000.0f) {
-        c = lerp_rgb(orange, red, (elev - 2000.0f) / 2000.0f);
-      } else if (elev < 6000.0f) {
-        c = lerp_rgb(red, purple, (elev - 4000.0f) / 2000.0f);
-      } else {
-        c = lerp_rgb(purple, white, std::clamp((elev - 6000.0f) / 3000.0f, 0.0f, 1.0f));
-      }
-    }
+    const Rgb c = elevation_rgb(data[i], sea_level_m);
     raw[3 * i + 0] = c.r;
     raw[3 * i + 1] = c.g;
     raw[3 * i + 2] = c.b;
@@ -323,12 +320,87 @@ bool write_pgm8(const std::string& path, const std::vector<uint8_t>& data, int w
   out.write(reinterpret_cast<const char*>(vis.data()), static_cast<std::streamsize>(vis.size()));
   return true;
 }
+// Orthographic globe snapshots (poles + two equatorial views): the equirect
+// export is a pipeline/interchange format, not a human-viewing projection;
+// these are for eyeballing worlds without the web studio.
+void write_ortho_views(const std::filesystem::path& out_dir, const std::vector<float>& elev,
+                       int w, int h, float sea_level_m) {
+  struct View {
+    const char* name;
+    double lat_deg;
+    double lon_deg;
+  };
+  const View views[] = {{"ortho_npole", 90.0, 0.0},
+                        {"ortho_spole", -90.0, 0.0},
+                        {"ortho_lon000", 15.0, 0.0},
+                        {"ortho_lon180", 15.0, 180.0}};
+  constexpr int kSize = 900;
+  constexpr double kPi = 3.14159265358979323846;
+
+  for (const View& view : views) {
+    const double la = view.lat_deg * kPi / 180.0;
+    const double lo = view.lon_deg * kPi / 180.0;
+    const double f[3] = {std::cos(la) * std::cos(lo), std::sin(la),
+                         std::cos(la) * std::sin(lo)};
+    double up_hint[3] = {0.0, 1.0, 0.0};
+    if (std::abs(view.lat_deg) > 89.0) {
+      up_hint[0] = -std::cos(lo);
+      up_hint[1] = 0.0;
+      up_hint[2] = -std::sin(lo);
+    }
+    double r[3] = {up_hint[1] * f[2] - up_hint[2] * f[1],
+                   up_hint[2] * f[0] - up_hint[0] * f[2],
+                   up_hint[0] * f[1] - up_hint[1] * f[0]};
+    const double rn = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+    for (double& v : r) {
+      v /= std::max(1e-12, rn);
+    }
+    const double u[3] = {f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2],
+                         f[0] * r[1] - f[1] * r[0]};
+
+    std::vector<unsigned char> raw(static_cast<size_t>(kSize) * kSize * 3u, 10);
+    #pragma omp parallel for schedule(static)
+    for (int py = 0; py < kSize; ++py) {
+      for (int px = 0; px < kSize; ++px) {
+        const double x = (px + 0.5) / kSize * 2.0 - 1.0;
+        const double y = 1.0 - (py + 0.5) / kSize * 2.0;
+        const double rr = x * x + y * y;
+        if (rr > 1.0) {
+          continue;
+        }
+        const double z = std::sqrt(1.0 - rr);
+        const double p[3] = {x * r[0] + y * u[0] + z * f[0],
+                             x * r[1] + y * u[1] + z * f[1],
+                             x * r[2] + y * u[2] + z * f[2]};
+        const double lat = std::asin(std::clamp(p[1], -1.0, 1.0));
+        const double lon = std::atan2(p[2], p[0]);
+        int sx = static_cast<int>((lon / kPi * 180.0 + 180.0) / 360.0 * w);
+        sx = ((sx % w) + w) % w;
+        const int sy = std::clamp(
+            static_cast<int>((90.0 - lat / kPi * 180.0) / 180.0 * h), 0, h - 1);
+        Rgb c = elevation_rgb(elev[sy * w + sx], sea_level_m);
+        const double shade = 0.55 + 0.45 * z;  // limb darkening for depth
+        const size_t o = (static_cast<size_t>(py) * kSize + px) * 3u;
+        raw[o + 0] = static_cast<unsigned char>(c.r * shade);
+        raw[o + 1] = static_cast<unsigned char>(c.g * shade);
+        raw[o + 2] = static_cast<unsigned char>(c.b * shade);
+      }
+    }
+    const std::string path = (out_dir / (std::string(view.name) + ".png")).string();
+    const unsigned err = lodepng::encode(path, raw, kSize, kSize, LCT_RGB, 8);
+    if (err != 0) {
+      std::cerr << "PNG encode failed for " << path << "\n";
+    }
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   PipelineParams params;
   std::string out_dir = "output";
   bool also_write_pgm = false;
+  bool write_ortho = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -383,6 +455,8 @@ int main(int argc, char** argv) {
       params.tectonics.collision_max_uplift_m = std::max(0.0, std::stod(argv[++i]));
     } else if (a == "--write-pgm") {
       also_write_pgm = true;
+    } else if (a == "--ortho-views") {
+      write_ortho = true;
     }
   }
 
@@ -461,6 +535,9 @@ int main(int argc, char** argv) {
   }
   if (!write_png8_mask((out_path / "lake_mask.png").string(), lake, w, h)) {
     return 2;
+  }
+  if (write_ortho) {
+    write_ortho_views(out_path, elev, w, h, params.hydrology.sea_level_m);
   }
   if (also_write_pgm) {
     write_pgm16((out_path / "elevation_eroded.pgm").string(), elev, w, h);
