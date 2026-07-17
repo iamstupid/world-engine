@@ -1,0 +1,22 @@
+{
+  "providers": {
+    "local8317": {"protocol": "openai",
+                  "base_url": "http://172.30.176.1:8317/v1",
+                  "key": "114514"},
+    "anthropic": {"protocol": "anthropic", "key_env": "ANTHROPIC_API_KEY"},
+    "gemini": {"protocol": "gemini", "key_env": "GEMINI_API_KEY"},
+    "openrouter": {"protocol": "openai",
+                   "base_url": "https://openrouter.ai/api/v1",
+                   "key_env": "OPENROUTER_API_KEY"},
+    "mock": {"protocol": "mock"}
+  },
+  "roles": {
+    "arbiter": {"provider": "local8317", "model": "gpt-5.4-mini"},
+    "kp": {"provider": "local8317", "model": "gpt-5.6-sol", "reasoning": "high"},
+    "actor_major": {"provider": "local8317", "model": "gpt-5.6-luna"},
+    "actor_minor": {"provider": "local8317", "model": "gpt-5.4-mini"},
+    "novelist": {"provider": "local8317", "model": "gpt-5.6-sol", "reasoning": "high"},
+    "painter": {"provider": "local8317", "model": "gpt-image-2"}
+  },
+  "seat_overrides": {}
+}

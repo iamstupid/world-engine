@@ -527,3 +527,12 @@ Implemented and gated this round (see WORKLOG for detail):
 
 Still open on this ladder: tectonics-at-F≈500 production preset, virtual
 texture streaming + star-chart UI (web), M15 city generation.
+
+### Status update (2026-07-17g): RP-1 + RP-2 IMPLEMENTED
+
+llmpool (multi-vendor + mock + ledger), rpkit (scene stage, three-layer
+utterances, movement physics, courier-delayed distribution, thread
+ledger, author sovereignty via staged changesets), refpack (skyline/
+minimap/skydome/lighting), imagegen (openai-image + gemini-image,
+render-guided). Demo: tools/scripts/rp_demo.py. Next: RP-3 multi-panel
+web UI (Playwright-verified), RP-4 novelize from transcripts.

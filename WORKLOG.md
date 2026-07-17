@@ -347,3 +347,35 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
 - Tests: C++ 7/7 (new amplification/5.3 gates at F=224 incl. single-grid
   Fig-4 reproduction), tests/py 51/51 (rivers 6, refine 2, novelkit 6,
   astro +2), e2e 8/8 (param group count 5 -> 6).
+
+---
+
+# Controlled Roleplay RP-1 + RP-2: kernel, AI pool, reference packs, image gen
+
+## Date: 2026-07-17
+
+- docs/RP_DESIGN.md: scene-stage model derived from writing methodology.
+- llmpool.py: one pool for every seat — openai protocol covers
+  OpenAI/Grok/DeepSeek/Kimi/GLM/OpenRouter/any base_url; native adapters
+  for Anthropic and Gemini; mock protocol for offline tests; per-seat
+  usage ledger; 5xx retry hardening. Config ai_pool.json (roles by
+  editorial function: kp/actor_major/actor_minor/arbiter/novelist/painter).
+- rpkit.py: seats with state cards and private feeds; scene containers
+  (open -> free three-layer utterances -> close = time advance + settle);
+  inner layer never leaves its seat; deterministic movement physics via
+  geoquery (too-fast rides rejected BEFORE canon); public events reach
+  off-stage seats after real news_arrival delays; thread ledger;
+  statecard deltas; author edit rights propagate to feeds; events stage
+  novelkit changesets (author merges); transcript JSONL + save/load.
+- refpack.py: scene reference packs — skyline elevation-angle profiles
+  (curvature-correct; synthetic-geometry gated: 2200 m island shows in
+  the east at >1 deg, open sea stays flat), minimap PNG, all-sky dome
+  PNG with blackbody star colors, lighting briefs.
+- imagegen.py: render-guided art — openai-image (generations/edits) and
+  gemini-image (nano banana) backends off the same pool config;
+  scene_prompt() injects simulated lighting/skyline as hard constraints.
+- rp_demo.py end-to-end with real seats (sol KP, luna as 凯尔, mini as
+  赛芮): three-layer turns landed on auto; "2-day ride to the capital"
+  rejected (needs 7); public event reached the off-stage scholar 3.7
+  days later by courier; scene art generated via gpt-image-2.
+- Tests: tests/py 71/71 (llmpool 5, rpkit 9, refpack/imagegen 6 added).
