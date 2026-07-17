@@ -113,6 +113,8 @@ def test_05_point_query(page):
 
 
 def test_06_overlays(page):
+    page.click("#tab-map")
+    time.sleep(0.3)
     for overlay in ("rivers", "settlements", "borders", "roads"):
         page.select_option("#overlay-select", overlay)
         time.sleep(0.4)

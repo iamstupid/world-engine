@@ -339,11 +339,21 @@ function drawOverlay() {
           if (first) ctx.moveTo(x, y); else ctx.lineTo(x, y);
           first = false; prev = x;
         }
-        if (state.overlay === "rivers") { ctx.strokeStyle = "rgba(80,170,255,0.9)"; ctx.lineWidth = Math.max(0.6, Math.log10((f.properties.discharge_m2 || 1e9) / 1e8)); }
+        if (state.overlay === "rivers") {
+          const lw = Math.max(1.1, Math.log10((f.properties.discharge_m2 || 1e9) / 1e8));
+          ctx.strokeStyle = "rgba(5,20,50,0.85)"; ctx.lineWidth = lw + 1.6; ctx.stroke();
+          ctx.strokeStyle = "rgba(120,205,255,0.95)"; ctx.lineWidth = lw;
+        }
         else if (state.overlay === "borders") { ctx.strokeStyle = "rgba(255,120,120,0.9)"; ctx.lineWidth = 1.4; ctx.setLineDash([5, 3]); }
-        else { ctx.strokeStyle = "rgba(230,200,120,0.9)"; ctx.lineWidth = 1; }
+        else { ctx.strokeStyle = "rgba(230,200,120,0.95)"; ctx.lineWidth = 1.6; }
         ctx.stroke();
         ctx.setLineDash([]);
+      } else if (g.type === "MultiPoint") {
+        ctx.fillStyle = "rgba(255,120,120,0.85)";
+        for (const [lon, lat] of g.coordinates) {
+          const [x, y] = px(lon, lat);
+          ctx.fillRect(x - 0.8, y - 0.8, 1.6, 1.6);
+        }
       } else if (g.type === "Point") {
         const [x, y] = px(g.coordinates[0], g.coordinates[1]);
         const size = f.properties.rank === 0 ? 5 : f.properties.rank === 1 ? 3.5 : 2.2;

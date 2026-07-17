@@ -176,3 +176,36 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   block (vs 8.5 s raster) - the lat-lon raster is now export-only in this
   mode. Gate test: test_geodesic_physics (layers, water coverage, rivers,
   determinism).
+
+---
+
+# Studio & Civilization Sprint (M7-M11)
+
+## Date: 2026-07-17
+
+- M7: Pipeline progress callbacks + cancellation; param_schema X-macro table
+  (schema JSON + string-keyed access); GeodesicGrid ring<->rhombus bijection
+  (tested dense); TerrainDataset geodesic cell layers; pybind11 module
+  (GIL-released generate, CancelFlag, geodesic_graph/atlas_map); FastAPI
+  server (sessions, SSE progress, raw layers, point query, paint upload,
+  features/entities); .weworld = SQLite+zstd.
+- M8: no-build web studio (vanilla JS + vendored three.js): schema-driven
+  forms, displaced globe, 2D map, client-side colormaps, save/load.
+  Playwright e2e suite with screenshot artifacts (headless chromium +
+  swiftshader).
+- M9: geodesic climate (insolation/lapse/continentality temperature, zonal
+  winds, upwind moisture advection with orographic rain shadows), runoff-
+  weighted discharge, Koppen-lite biomes, vegetation; coastline
+  naturalization (fractal crust seed, sea-band displacement noise,
+  lowstand-erode-then-flood). Multi-basin ocean rule (>=2% components).
+- M10: paint editing chain: uplift_paint (erosion uplift) +
+  continent_seed_paint applied to the FINAL canonical crust (painting
+  targets today's map; t=0 application let plate drift carry paint away).
+- M11: civ layer on the geodesic graph (Python/scipy): population potential,
+  Poisson-disk settlements with Zipf ranks, culture hearth region growing
+  over friction, polity expansion from capitals, syllable namegen per
+  culture, vector rivers traced from the flow graph, MST least-cost roads,
+  border midpoint chains; entities + GeoJSON features persisted in .weworld
+  and rendered as studio overlays.
+- Full e2e: 8/8 passing (form, generation, globe/map pixels, layers, query,
+  overlays, save/load, paint round trip).
