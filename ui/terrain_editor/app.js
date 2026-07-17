@@ -459,6 +459,14 @@ async function uploadPaint() {
     method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Width": W, "X-Height": H },
     body: field.buffer,
   });
+  // The same strokes also seed continental crust, so painting over ocean
+  // raises new land rather than uplifting the sea floor into nothing.
+  const seed = new Float32Array(W * H);
+  for (let i = 0; i < field.length; i++) seed[i] = field[i] > 0 ? 1 : 0;
+  await fetch(`/api/sessions/${state.sid}/paint/continent_seed_paint`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Width": W, "X-Height": H },
+    body: seed.buffer,
+  });
 }
 
 // ---------------- save / load ----------------

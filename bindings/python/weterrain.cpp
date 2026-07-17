@@ -32,8 +32,22 @@ py::bytes vec_bytes(const void* data, size_t bytes) {
   return py::bytes(static_cast<const char*>(data), bytes);
 }
 
-py::dict generate(const wtp::PipelineParams& params, py::object progress,
-                  std::shared_ptr<CancelFlag> cancel) {
+py::dict generate(const wtp::PipelineParams& params_in, py::object progress,
+                  std::shared_ptr<CancelFlag> cancel, py::object paint) {
+  wtp::PipelineParams params = params_in;
+  if (!paint.is_none()) {
+    for (const auto item : paint.cast<py::dict>()) {
+      const auto name = item.first.cast<std::string>();
+      const auto tup = item.second.cast<py::tuple>();
+      wtp::PaintLayer layer;
+      layer.width = tup[0].cast<int>();
+      layer.height = tup[1].cast<int>();
+      const auto raw = tup[2].cast<std::string>();
+      layer.data.resize(raw.size() / sizeof(float));
+      std::memcpy(layer.data.data(), raw.data(), layer.data.size() * sizeof(float));
+      params.paint_layers[name] = std::move(layer);
+    }
+  }
   wtp::ProgressFn progress_fn;
   if (!progress.is_none()) {
     auto cb = std::make_shared<py::function>(progress.cast<py::function>());
@@ -178,7 +192,8 @@ PYBIND11_MODULE(weterrain, m) {
 
   m.def("schema_json", &wtp::params_schema_json);
   m.def("generate", &generate, py::arg("params"), py::arg("progress") = py::none(),
-        py::arg("cancel") = std::shared_ptr<CancelFlag>{});
+        py::arg("cancel") = std::shared_ptr<CancelFlag>{},
+        py::arg("paint") = py::none());
   m.def("geodesic_graph", &geodesic_graph, py::arg("frequency"));
   m.def("atlas_map", &atlas_map, py::arg("frequency"));
 }

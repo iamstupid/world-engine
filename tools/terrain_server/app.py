@@ -84,7 +84,10 @@ def _run_generation(session: Session):
             _push(session, {"type": "progress", "stage": stage, "index": idx,
                             "total": total, "phase": phase})
 
-        result = weterrain.generate(params, progress=progress, cancel=cancel)
+        paint = {name: (w, h, data)
+                 for name, (w, h, data) in session.paint.items()} or None
+        result = weterrain.generate(params, progress=progress, cancel=cancel,
+                                    paint=paint)
         session.result = result
         session.error = None
         try:
@@ -241,8 +244,20 @@ async def upload_paint(sid: str, layer: str, request: Request):
     s = _session(sid)
     if layer not in ("uplift_paint", "continent_seed_paint"):
         raise HTTPException(400, "unknown paint layer")
-    s.paint[layer] = await request.body()
-    return {"ok": True, "bytes": len(s.paint[layer])}
+    w = int(request.headers.get("X-Width", "512"))
+    h = int(request.headers.get("X-Height", "256"))
+    body = await request.body()
+    if len(body) != w * h * 4:
+        raise HTTPException(400, "size mismatch")
+    s.paint[layer] = (w, h, body)
+    return {"ok": True, "bytes": len(body)}
+
+
+@app.delete("/api/sessions/{sid}/paint")
+def clear_paint(sid: str):
+    s = _session(sid)
+    s.paint.clear()
+    return {"ok": True}
 
 
 # ---- M11: features / entities ----

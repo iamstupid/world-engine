@@ -1,6 +1,18 @@
 #pragma once
 
+#include <map>
+#include <string>
+#include <vector>
+
 namespace world_engine::terrain::procedural {
+
+// Author-painted override raster (equirect, any resolution; sampled
+// bilinearly). Participates in the stage cache digest.
+struct PaintLayer {
+  int width = 0;
+  int height = 0;
+  std::vector<float> data;
+};
 
 struct NoiseParams {
   double base_frequency = 0.8;
@@ -112,6 +124,10 @@ struct PipelineParams {
   TectonicsParams tectonics{};
   ErosionParams erosion{};
   HydrologyParams hydrology{};
+
+  // Editing overrides (plan M10): "continent_seed_paint" (0..1, biases crust
+  // init toward land) and "uplift_paint" (m/yr, added to the erosion uplift).
+  std::map<std::string, PaintLayer> paint_layers;
 };
 
 }  // namespace world_engine::terrain::procedural

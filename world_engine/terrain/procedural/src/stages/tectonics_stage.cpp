@@ -1132,6 +1132,38 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
     global_resample(window_myr);
   }
 
+  // Author paint (M10): continent_seed_paint applies to the FINAL canonical
+  // crust - the author is drawing on today's map, not on the crust of
+  // 250 My ago (which the plates would carry away). Painted cells become
+  // continental platforms; erosion then sculpts them.
+  {
+    const auto cpaint_it = params.paint_layers.find("continent_seed_paint");
+    if (cpaint_it != params.paint_layers.end() && cpaint_it->second.width > 0) {
+      const PaintLayer& paint = cpaint_it->second;
+      #pragma omp parallel for schedule(static)
+      for (int i = 0; i < n_cells; ++i) {
+        const Vec3d& c = grid.cell_center(i);
+        const double lat = std::asin(std::clamp(c.y, -1.0, 1.0));
+        const double lon = std::atan2(c.z, c.x);
+        const int pw = paint.width;
+        const int ph = paint.height;
+        const int px =
+            ((static_cast<int>((lon / kPi * 180.0 + 180.0) / 360.0 * pw) % pw) + pw) %
+            pw;
+        const int py = std::clamp(
+            static_cast<int>((90.0 - lat / kPi * 180.0) / 180.0 * ph), 0, ph - 1);
+        const float v = paint.data[py * pw + px];
+        if (v > 0.3f) {
+          crust.type[i] = 1;
+          const float target = static_cast<float>(tp.continental_base_m) +
+                               (v - 0.3f) * 900.0f;
+          crust.elevation_m[i] = std::max(crust.elevation_m[i], target);
+          crust.uplift_ema_m_yr[i] = std::max(crust.uplift_ema_m_yr[i], 2e-4f);
+        }
+      }
+    }
+  }
+
   // ---- Rasterize canonical crust to the lat-lon dataset ----
   // After the final resample all plate deltas are identity, so a single
   // locate() per pixel suffices.

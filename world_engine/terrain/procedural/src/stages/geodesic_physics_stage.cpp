@@ -79,6 +79,32 @@ float sample_raster(const TerrainDomain& domain, const std::vector<float>& layer
   return c0 + (c1 - c0) * ty;
 }
 
+// Bilinear sample of a painted override raster at a unit direction (y-up
+// lat/lon convention shared with TerrainDomain).
+float sample_paint(const PaintLayer& paint, const Vec3d& dir) {
+  if (paint.width <= 0 || paint.height <= 0 || paint.data.empty()) {
+    return 0.0f;
+  }
+  const double lat = std::asin(std::clamp(dir.y, -1.0, 1.0));
+  const double lon = std::atan2(dir.z, dir.x);
+  const int w = paint.width;
+  const int h = paint.height;
+  const double u = (lon / kPi * 180.0 + 180.0) / 360.0 * w - 0.5;
+  const double v = (90.0 - lat / kPi * 180.0) / 180.0 * h - 0.5;
+  int x0 = static_cast<int>(std::floor(u));
+  const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, h - 1);
+  const int y1 = std::min(y0 + 1, h - 1);
+  const float tx = static_cast<float>(u - std::floor(u));
+  const float ty = std::clamp(static_cast<float>(v - y0), 0.0f, 1.0f);
+  const int x1 = ((x0 + 1) % w + w) % w;
+  x0 = (x0 % w + w) % w;
+  const float c0 = paint.data[y0 * w + x0] +
+                   (paint.data[y0 * w + x1] - paint.data[y0 * w + x0]) * tx;
+  const float c1 = paint.data[y1 * w + x0] +
+                   (paint.data[y1 * w + x1] - paint.data[y1 * w + x0]) * tx;
+  return c0 + (c1 - c0) * ty;
+}
+
 // Per-cell neighbor cache (indices + edge lengths in meters).
 struct CellGraph {
   const GeodesicGrid* grid = nullptr;
@@ -442,11 +468,17 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
 
     z0.resize(n);
     uplift.resize(n);
+    const auto paint_it = params.paint_layers.find("uplift_paint");
+    const PaintLayer* uplift_paint =
+        (paint_it != params.paint_layers.end()) ? &paint_it->second : nullptr;
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; ++i) {
       const Vec3d& c = grid->cell_center(i);
       z0[i] = sample_raster(domain, base, c);
       uplift[i] = sample_raster(domain, uplift_raster, c);
+      if (uplift_paint != nullptr) {
+        uplift[i] += std::max(0.0f, sample_paint(*uplift_paint, c));
+      }
     }
 
     // Initial guess: base elevation at the coarsest level, jittered

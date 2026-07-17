@@ -129,7 +129,14 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
       << params.erosion.thermal_critical_slope << ','
       << params.erosion.fixed_point_ema << '|';
   oss << params.hydrology.river_area_threshold_m2 << ',' << params.hydrology.sea_level_m
-      << ',' << params.hydrology.flood_lowstand_m;
+      << ',' << params.hydrology.flood_lowstand_m << '|';
+  for (const auto& [name, paint] : params.paint_layers) {
+    oss << name << ':' << paint.width << 'x' << paint.height << ':'
+        << hex64(fnv1a64(std::string_view(
+               reinterpret_cast<const char*>(paint.data.data()),
+               paint.data.size() * sizeof(float))))
+        << '|';
+  }
   return hex64(fnv1a64(oss.str()));
 }
 
