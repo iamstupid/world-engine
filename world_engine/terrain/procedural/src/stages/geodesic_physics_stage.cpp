@@ -616,6 +616,18 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
                              : 0;
     }
   }
+  // Retain the final cell buffers (rhombus-atlas persistence, plan
+  // addendum b): consumers fetch them via the bindings and pack rhombus
+  // atlases with GeodesicGrid::cell_to_rhombus.
+  {
+    std::vector<float> ocean_f(n);
+    for (int i = 0; i < n; ++i) {
+      ocean_f[i] = static_cast<float>(cell_ocean[i]);
+    }
+    dataset.set_cell_layer("cell_elevation_m", f_top, z);
+    dataset.set_cell_layer("cell_flow_accum_m2", f_top, accum);
+    dataset.set_cell_layer("cell_ocean", f_top, std::move(ocean_f));
+  }
   std::cout << "  [geodesic-physics] F=" << f_top << " cells=" << n << " done\n";
 }
 

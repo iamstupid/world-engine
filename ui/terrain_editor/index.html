@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WorldEngine Studio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 system-ui, sans-serif; background: #14161a; color: #d7dae0; display: flex; height: 100vh; overflow: hidden; }
+  #sidebar { width: 320px; min-width: 320px; background: #1b1e24; border-right: 1px solid #2a2e36; display: flex; flex-direction: column; }
+  #sidebar header { padding: 12px 14px; border-bottom: 1px solid #2a2e36; }
+  #sidebar header h1 { margin: 0; font-size: 15px; letter-spacing: 0.4px; }
+  #params { flex: 1; overflow-y: auto; padding: 8px 14px; }
+  .group { margin-bottom: 10px; }
+  .group > summary { cursor: pointer; font-weight: 600; color: #9fb4d8; padding: 4px 0; }
+  .prow { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .prow label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab1bd; }
+  .prow input { width: 110px; background: #23272f; color: #e6e9ef; border: 1px solid #343a45; border-radius: 4px; padding: 3px 6px; }
+  #actions { padding: 10px 14px; border-top: 1px solid #2a2e36; display: flex; flex-direction: column; gap: 8px; }
+  button { background: #2f66d0; color: #fff; border: 0; border-radius: 5px; padding: 7px 10px; cursor: pointer; font-weight: 600; }
+  button.secondary { background: #2a2e36; color: #cfd5df; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #progress { height: 6px; background: #23272f; border-radius: 3px; overflow: hidden; }
+  #progress-bar { height: 100%; width: 0%; background: #47b26b; transition: width 0.2s; }
+  #status { color: #8f97a3; min-height: 16px; font-size: 12px; }
+  .row { display: flex; gap: 6px; }
+  .row input, .row select { flex: 1; background: #23272f; color: #e6e9ef; border: 1px solid #343a45; border-radius: 4px; padding: 5px 6px; }
+  #main { flex: 1; display: flex; flex-direction: column; position: relative; }
+  #toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #191c21; border-bottom: 1px solid #2a2e36; }
+  #toolbar select { background: #23272f; color: #e6e9ef; border: 1px solid #343a45; border-radius: 4px; padding: 5px 8px; }
+  .tab { padding: 5px 12px; border-radius: 5px; cursor: pointer; color: #aab1bd; }
+  .tab.active { background: #2f66d0; color: #fff; }
+  #viewport { flex: 1; position: relative; }
+  #globe-canvas, #map-wrap { position: absolute; inset: 0; }
+  #map-wrap { display: none; overflow: hidden; }
+  #map-canvas { position: absolute; image-rendering: pixelated; cursor: crosshair; }
+  #overlay-canvas { position: absolute; pointer-events: none; }
+  #query { position: absolute; right: 12px; top: 12px; background: rgba(20,23,28,0.92); border: 1px solid #343a45; border-radius: 6px; padding: 10px 12px; min-width: 210px; max-width: 280px; font-size: 12px; display: none; }
+  #query h3 { margin: 0 0 6px; font-size: 12px; color: #9fb4d8; }
+  #query table { width: 100%; border-collapse: collapse; }
+  #query td { padding: 1px 0; }
+  #query td:last-child { text-align: right; color: #e6e9ef; }
+  #brush-panel { display: none; gap: 6px; align-items: center; }
+  #brush-panel.active { display: flex; }
+</style>
+</head>
+<body>
+  <div id="sidebar">
+    <header><h1>WorldEngine Studio</h1></header>
+    <div id="params"></div>
+    <div id="actions">
+      <button id="btn-generate">Generate</button>
+      <div id="progress"><div id="progress-bar"></div></div>
+      <div id="status">idle</div>
+      <div class="row">
+        <input id="world-name" placeholder="world name" value="demo">
+        <button id="btn-save" class="secondary">Save</button>
+      </div>
+      <div class="row">
+        <select id="world-list"></select>
+        <button id="btn-load" class="secondary">Load</button>
+      </div>
+    </div>
+  </div>
+  <div id="main">
+    <div id="toolbar">
+      <span class="tab active" id="tab-globe">Globe</span>
+      <span class="tab" id="tab-map">2D Map</span>
+      <select id="layer-select"></select>
+      <select id="overlay-select">
+        <option value="">no overlay</option>
+        <option value="rivers">rivers</option>
+        <option value="settlements">settlements</option>
+        <option value="borders">borders</option>
+        <option value="roads">roads</option>
+      </select>
+      <div id="brush-panel">
+        <span class="tab" id="brush-toggle">Paint uplift</span>
+        <input id="brush-size" type="range" min="8" max="80" value="30">
+      </div>
+    </div>
+    <div id="viewport">
+      <canvas id="globe-canvas"></canvas>
+      <div id="map-wrap">
+        <canvas id="map-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
+      </div>
+      <div id="query"><h3>Point query</h3><table id="query-table"></table></div>
+    </div>
+  </div>
+  <script src="/static/vendor/three.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

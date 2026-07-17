@@ -49,7 +49,20 @@ class TerrainDataset {
 
   [[nodiscard]] std::string deterministic_hash() const;
 
+  // Geodesic cell buffers (rhombus-atlas persistence, plan addendum b):
+  // float data over the cells of a GeodesicGrid of the given frequency.
+  // Not part of deterministic_hash (raster layers remain the hashed truth).
+  struct CellLayer {
+    int frequency = 0;
+    std::vector<float> data;
+  };
+  void set_cell_layer(const std::string& name, int frequency, std::vector<float> data);
+  [[nodiscard]] bool has_cell_layer(const std::string& name) const;
+  [[nodiscard]] const CellLayer& cell_layer(const std::string& name) const;
+  [[nodiscard]] std::vector<std::string> list_cell_layers() const;
+
  private:
+  std::unordered_map<std::string, CellLayer> cell_layers_;
   LayerData& mutable_layer_or_throw(const std::string& name);
   [[nodiscard]] const LayerData& layer_or_throw(const std::string& name) const;
 

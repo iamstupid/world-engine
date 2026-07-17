@@ -32,6 +32,11 @@ std::string hex64(uint64_t value) {
 }  // namespace
 
 TerrainDataset Pipeline::run(const PipelineParams& params) {
+  return run(params, ProgressFn{}, nullptr);
+}
+
+TerrainDataset Pipeline::run(const PipelineParams& params, const ProgressFn& progress,
+                             const std::atomic<bool>* cancel) {
   TerrainDataset dataset(TerrainDomain(params.width, params.height, params.radius_m));
   dataset.set_seed(params.seed);
 
@@ -40,6 +45,12 @@ TerrainDataset Pipeline::run(const PipelineParams& params) {
   const int stage_total = 6;
   const auto run_stage = [&](const std::string& stage_name, const auto& stage_fn) {
     ++stage_idx;
+    if (cancel != nullptr && cancel->load()) {
+      throw Cancelled{};
+    }
+    if (progress) {
+      progress(stage_name, stage_idx, stage_total, 0.0);
+    }
     std::cout << "[Progress " << stage_idx << "/" << stage_total << "] " << stage_name << " started\n";
     const auto t0 = std::chrono::steady_clock::now();
 
@@ -69,6 +80,9 @@ TerrainDataset Pipeline::run(const PipelineParams& params) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     std::cout << "[Progress " << stage_idx << "/" << stage_total << "] " << stage_name << " done (" << ms
               << " ms)\n";
+    if (progress) {
+      progress(stage_name, stage_idx, stage_total, 1.0);
+    }
   };
 
   run_stage("noise", stages::run_noise_stage);

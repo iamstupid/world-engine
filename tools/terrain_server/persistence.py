@@ -1,0 +1,86 @@
+"""`.weworld` container: a single SQLite database holding params, raster
+layers, geodesic cell layers, and (M11+) vector features / lore entities.
+Layers are zstd-compressed."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+import zstandard as zstd
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS layers (
+  name TEXT PRIMARY KEY, dtype TEXT, width INT, height INT, data BLOB);
+CREATE TABLE IF NOT EXISTS cell_layers (
+  name TEXT PRIMARY KEY, frequency INT, dtype TEXT, data BLOB);
+CREATE TABLE IF NOT EXISTS features (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, name TEXT, geojson TEXT);
+CREATE TABLE IF NOT EXISTS entities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, name TEXT, data TEXT,
+  locked INT DEFAULT 0);
+"""
+
+
+def save_world(path: Path, params: dict, result: dict, features: list | None = None,
+               entities: list | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+    con = sqlite3.connect(path)
+    try:
+        con.executescript(SCHEMA)
+        cctx = zstd.ZstdCompressor(level=6)
+        con.execute("INSERT INTO meta VALUES ('params', ?)", (json.dumps(params),))
+        con.execute("INSERT INTO meta VALUES ('width', ?)", (str(result["width"]),))
+        con.execute("INSERT INTO meta VALUES ('height', ?)", (str(result["height"]),))
+        con.execute("INSERT INTO meta VALUES ('hash', ?)", (result.get("hash", ""),))
+        for name, entry in result["layers"].items():
+            con.execute(
+                "INSERT INTO layers VALUES (?,?,?,?,?)",
+                (name, entry["dtype"], result["width"], result["height"],
+                 cctx.compress(entry["data"])))
+        for name, entry in result.get("cell_layers", {}).items():
+            con.execute(
+                "INSERT INTO cell_layers VALUES (?,?,?,?)",
+                (name, entry["frequency"], entry["dtype"], cctx.compress(entry["data"])))
+        for feat in features or []:
+            con.execute("INSERT INTO features (kind, name, geojson) VALUES (?,?,?)",
+                        (feat["kind"], feat.get("name", ""), json.dumps(feat)))
+        for ent in entities or []:
+            con.execute(
+                "INSERT INTO entities (kind, name, data, locked) VALUES (?,?,?,?)",
+                (ent["kind"], ent.get("name", ""), json.dumps(ent),
+                 1 if ent.get("locked") else 0))
+        con.commit()
+    finally:
+        con.close()
+
+
+def load_world(path: Path) -> tuple[dict, dict, list, list]:
+    con = sqlite3.connect(path)
+    try:
+        dctx = zstd.ZstdDecompressor()
+        meta = dict(con.execute("SELECT k, v FROM meta"))
+        params = json.loads(meta.get("params", "{}"))
+        result = {
+            "width": int(meta["width"]),
+            "height": int(meta["height"]),
+            "hash": meta.get("hash", ""),
+            "layers": {},
+            "cell_layers": {},
+        }
+        for name, dtype, w, h, blob in con.execute("SELECT * FROM layers"):
+            result["layers"][name] = {"dtype": dtype, "data": dctx.decompress(blob)}
+        for name, freq, dtype, blob in con.execute("SELECT * FROM cell_layers"):
+            result["cell_layers"][name] = {
+                "frequency": freq, "dtype": dtype, "data": dctx.decompress(blob)}
+        features = [json.loads(row[0]) for row in
+                    con.execute("SELECT geojson FROM features")]
+        entities = [json.loads(row[0]) for row in
+                    con.execute("SELECT data FROM entities")]
+        return params, result, features, entities
+    finally:
+        con.close()

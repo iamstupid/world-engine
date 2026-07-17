@@ -168,4 +168,27 @@ const LayerData& TerrainDataset::layer_or_throw(const std::string& name) const {
   return it->second;
 }
 
+
+void TerrainDataset::set_cell_layer(const std::string& name, int frequency,
+                                    std::vector<float> data) {
+  cell_layers_[name] = CellLayer{frequency, std::move(data)};
+}
+
+bool TerrainDataset::has_cell_layer(const std::string& name) const {
+  return cell_layers_.find(name) != cell_layers_.end();
+}
+
+const TerrainDataset::CellLayer& TerrainDataset::cell_layer(const std::string& name) const {
+  return cell_layers_.at(name);
+}
+
+std::vector<std::string> TerrainDataset::list_cell_layers() const {
+  std::vector<std::string> names;
+  names.reserve(cell_layers_.size());
+  for (const auto& [name, layer] : cell_layers_) {
+    names.push_back(name);
+  }
+  return names;
+}
+
 }  // namespace world_engine::terrain

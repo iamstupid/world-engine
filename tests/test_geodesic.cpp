@@ -150,6 +150,45 @@ void test_frequency(int f) {
   }
 }
 
+void test_rhombus_bijection(int f) {
+  const GeodesicGrid grid(f);
+  char buf[128];
+  std::vector<int> seen(10 * f * f, 0);
+  int north = 0;
+  int south = 0;
+  for (int c = 0; c < grid.cell_count(); ++c) {
+    const auto rc = grid.cell_to_rhombus(c);
+    if (rc.rhombus == -1) {
+      ++north;
+      expect(grid.rhombus_to_cell(-1, 0, 0) == c, "north pole roundtrip");
+      continue;
+    }
+    if (rc.rhombus == -2) {
+      ++south;
+      expect(grid.rhombus_to_cell(-2, 0, 0) == c, "south pole roundtrip");
+      continue;
+    }
+    expect(rc.rhombus >= 0 && rc.rhombus < 10, "rhombus id in range");
+    expect(rc.i >= 0 && rc.i < f && rc.j >= 0 && rc.j < f, "rhombus ij in range");
+    const int flat = (rc.rhombus * f + rc.i) * f + rc.j;
+    expect(seen[flat] == 0, "rhombus coord unique");
+    seen[flat] = 1;
+    if (grid.rhombus_to_cell(rc.rhombus, rc.i, rc.j) != c) {
+      std::snprintf(buf, sizeof(buf), "F=%d rhombus roundtrip cell %d (r%d %d,%d)", f,
+                    c, rc.rhombus, rc.i, rc.j);
+      expect(false, buf);
+    }
+  }
+  expect(north == 1 && south == 1, "exactly two pole cells");
+  int covered = 0;
+  for (int v : seen) {
+    covered += v;
+  }
+  std::snprintf(buf, sizeof(buf), "F=%d rhombus atlas dense (%d/%d)", f, covered,
+                10 * f * f);
+  expect(covered == 10 * f * f, buf);
+}
+
 void test_multigrid_nesting() {
   const GeodesicGrid coarse(8);
   const GeodesicGrid fine(16);
@@ -171,6 +210,7 @@ void test_multigrid_nesting() {
 int main() {
   for (const int f : {1, 2, 3, 4, 7, 16}) {
     test_frequency(f);
+    test_rhombus_bijection(f);
   }
   test_multigrid_nesting();
   if (g_failures != 0) {

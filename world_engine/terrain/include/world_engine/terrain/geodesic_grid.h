@@ -65,6 +65,20 @@ class GeodesicGrid {
   // Cell of maximum weight for a direction (convenience).
   [[nodiscard]] int locate_cell(const Vec3d& unit_dir) const;
 
+  // Rhombus-atlas indexing: the 10F^2 non-pole cells partition exactly into
+  // 10 rhombi of F x F cells (northern rhombus k: pole,V_k,W_k,V_{k+1};
+  // southern rhombus 5+k: V_{k+1},W_k,pole,W_{k+1}). Atlas layout: 5 columns
+  // x 2 rows of F x F blocks (width 5F, height 2F); pixel (x, y) belongs to
+  // rhombus (y/F)*5 + x/F with local i = y%F, j = x%F. Poles are the two
+  // extra cells outside the atlas (rhombus() returns -1 / -2 for them).
+  struct RhombusCoord {
+    int rhombus = -1;  // 0..9; -1 = north pole cell, -2 = south pole cell
+    int i = 0;         // [0, F)
+    int j = 0;         // [0, F)
+  };
+  [[nodiscard]] RhombusCoord cell_to_rhombus(int cell) const;
+  [[nodiscard]] int rhombus_to_cell(int rhombus, int i, int j) const;
+
  private:
   struct Face {
     // Corner directions (unit) and inverse of the [A B C] column matrix for

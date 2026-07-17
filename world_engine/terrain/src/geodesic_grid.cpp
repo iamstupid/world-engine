@@ -548,4 +548,87 @@ int GeodesicGrid::locate_cell(const Vec3d& p) const {
   return lk.cell[best];
 }
 
+GeodesicGrid::RhombusCoord GeodesicGrid::cell_to_rhombus(int cell) const {
+  const int n = freq_;
+  if (cell == 0) {
+    return {-1, 0, 0};
+  }
+  if (cell == cell_count_ - 1) {
+    return {-2, 0, 0};
+  }
+  const auto [row, col] = row_col(cell);
+  const int stride = sector_stride(row);
+  const int sec = col / stride;
+  const int c = col % stride;
+  RhombusCoord out;
+  if (row < n) {
+    // Top cap: north rhombus, top-face frame (a, b) = (row - c, c).
+    out.rhombus = sec;
+    out.i = (row - c) - 1;
+    out.j = c;
+  } else if (row < 2 * n) {
+    const int s = row - n;
+    const int t = c;
+    if (s + t <= n - 1) {
+      // Mid-lower triangle -> north rhombus: (a, b) = (n - t, s + t).
+      out.rhombus = sec;
+      out.i = (n - t) - 1;
+      out.j = s + t;
+    } else {
+      // Mid-upper triangle -> south rhombus: (a', b') = (2n - s - t, t).
+      out.rhombus = 5 + sec;
+      out.i = (2 * n - s - t) - 1;
+      out.j = t;
+    }
+  } else if (row == 2 * n) {
+    // W ring -> south rhombus: (a', b') = (n - c, c).
+    out.rhombus = 5 + sec;
+    out.i = (n - c) - 1;
+    out.j = c;
+  } else {
+    // Bottom cap -> south rhombus: (a', b') = (n - s' - c, c), s' = row - 2n.
+    const int sp = row - 2 * n;
+    out.rhombus = 5 + sec;
+    out.i = (n - sp - c) - 1;
+    out.j = c;
+  }
+  return out;
+}
+
+int GeodesicGrid::rhombus_to_cell(int rhombus, int i, int j) const {
+  const int n = freq_;
+  if (rhombus == -1) {
+    return 0;
+  }
+  if (rhombus == -2) {
+    return cell_count_ - 1;
+  }
+  const int a = i + 1;
+  const int b = j;
+  if (rhombus < 5) {
+    const int sec = rhombus;
+    if (a + b <= n - 1) {
+      // Top face: row = a + b, rem = b.
+      const int row = a + b;
+      return index(row, sec * sector_stride(row) + b);
+    }
+    // Mid-lower: t = n - a, s = a + b - n; row = n + s, rem = t.
+    const int row = a + b;  // n + (a + b - n)
+    return index(row, sec * n + (n - a));
+  }
+  const int sec = rhombus - 5;
+  if (a + b <= n - 1) {
+    // Bottom cap: s' = n - a - b, row = 2n + s', rem = b.
+    const int row = 2 * n + (n - a - b);
+    return index(row, sec * sector_stride(row) + b);
+  }
+  if (a + b == n) {
+    // W ring (row 2n): rem = b.
+    return index(2 * n, sec * n + b);
+  }
+  // Mid-upper: s = 2n - a - b, t = b; row = n + s, rem = t.
+  const int row = 3 * n - a - b;  // n + (2n - a - b)
+  return index(row, sec * n + b);
+}
+
 }  // namespace world_engine::terrain

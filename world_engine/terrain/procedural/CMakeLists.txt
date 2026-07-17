@@ -2,6 +2,7 @@ find_package(OpenMP)
 
 add_library(world_engine_terrain_procedural
   src/pipeline.cpp
+  src/param_schema.cpp
   src/procedural_generator.cpp
   src/stages/noise_stage.cpp
   src/stages/tectonics_stage.cpp
