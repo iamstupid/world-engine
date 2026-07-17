@@ -26,6 +26,7 @@
 #include <queue>
 #include <vector>
 
+#include "FastNoiseLite.h"
 #include "world_engine/terrain/geodesic_grid.h"
 
 namespace world_engine::terrain::procedural::stages {
@@ -382,6 +383,10 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   const auto& base = dataset.float_layer("elevation_base_m");
   const auto& uplift_raster = dataset.float_layer("uplift_rate_m_per_yr");
   const float sea = params.hydrology.sea_level_m;
+  // Drowned-coast flooding (coastline fix 3): erode against lowstand
+  // outlets, then flood back to sea level - valleys carved below today's sea
+  // level become rias, fjords and shelf archipelagos.
+  const float eff_sea = sea - params.hydrology.flood_lowstand_m;
 
   if (!dataset.has_layer("elevation_eroded_m")) {
     dataset.create_float_layer("elevation_eroded_m", "m",
@@ -399,6 +404,18 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   }
   if (!dataset.has_layer("river_mask")) {
     dataset.create_u8_layer("river_mask", "bool", "River mask");
+  }
+  if (!dataset.has_layer("temperature_c")) {
+    dataset.create_float_layer("temperature_c", "C", "Mean annual temperature");
+  }
+  if (!dataset.has_layer("precipitation_mm_yr")) {
+    dataset.create_float_layer("precipitation_mm_yr", "mm/yr", "Annual precipitation");
+  }
+  if (!dataset.has_layer("biome_id")) {
+    dataset.create_u8_layer("biome_id", "id", "Biome classification");
+  }
+  if (!dataset.has_layer("vegetation")) {
+    dataset.create_float_layer("vegetation", "", "Vegetation density (NPP proxy)");
   }
 
   // Frequency hierarchy: F = F0 * 2^(levels-1).
@@ -468,7 +485,7 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
     if (iters > 0) {
       std::cout << "  [geodesic-erosion] level " << (level + 1) << "/" << levels
                 << " F=" << f << " cells=" << n << " iterations " << iters << "\n";
-      solve_level(graph, params.erosion, params.seed, z0, uplift, sea, z_work, iters,
+      solve_level(graph, params.erosion, params.seed, z0, uplift, eff_sea, z_work, iters,
                   level);
     }
 
@@ -480,20 +497,201 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   const int n = top.cell_count();
   std::vector<float>& z = z_guess;
 
-  // Ocean bathymetry is untouched by the solver.
+  // Deep-ocean bathymetry is untouched by the solver; the lowstand band
+  // [eff_sea, sea] keeps its carved valleys and floods below.
   #pragma omp parallel for schedule(static)
   for (int i = 0; i < n; ++i) {
-    if (z0[i] <= sea) {
+    if (z0[i] <= eff_sea) {
       z[i] = z0[i];
     }
   }
 
-  // ---- Hydrology: multiple-flow-direction accumulation on the final z ----
-  const std::vector<uint8_t> outlet = build_outlet_mask(z0, sea);
+  // ---- Climate (plan M9): temperature, zonal winds, moisture advection ----
+  std::vector<float> temp_c(n);
+  std::vector<float> precip_mm(n);
+  std::vector<float> runoff_mm(n);
+  std::vector<uint8_t> biome(n, 0);
+  std::vector<float> veg(n, 0.0f);
+  {
+    FastNoiseLite band_noise(params.seed + 5501);
+    band_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    band_noise.SetFrequency(1.3f);
+
+    std::vector<float> lat_rad(n);
+    std::vector<float> wind(static_cast<size_t>(n) * 3);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
+      const Vec3d& p = top.cell_center(i);
+      const double lat = std::asin(std::clamp(p.y, -1.0, 1.0));
+      lat_rad[i] = static_cast<float>(lat);
+      // temperature: insolation + lapse rate + coherent noise
+      const double t = -23.0 + 50.0 * std::pow(std::max(0.0, std::cos(lat)), 1.4) -
+                       6.5 * std::max(0.0f, z[i]) / 1000.0 +
+                       1.5 * band_noise.GetNoise(static_cast<float>(p.x * 3),
+                                                 static_cast<float>(p.y * 3),
+                                                 static_cast<float>(p.z * 3));
+      temp_c[i] = static_cast<float>(t);
+      // zonal wind bands with noise-jittered edges
+      const double jitter = 6.0 * band_noise.GetNoise(static_cast<float>(p.x),
+                                                      static_cast<float>(p.y),
+                                                      static_cast<float>(p.z));
+      const double abs_lat = std::abs(lat) * 180.0 / kPi + jitter;
+      const double easterly = (abs_lat < 28.0 || abs_lat > 62.0) ? -1.0 : 1.0;
+      // east tangent in the domain's y-up frame
+      Vec3d east{p.z, 0.0, -p.x};
+      const double en = std::sqrt(dot(east, east));
+      east = (en > 1e-9) ? Vec3d{east.x / en, east.y / en, east.z / en}
+                         : Vec3d{1.0, 0.0, 0.0};
+      Vec3d north = cross(p, east);
+      const double tilt = (abs_lat < 28.0) ? -0.4 * ((lat >= 0) ? 1.0 : -1.0)
+                                           : 0.2 * ((lat >= 0) ? 1.0 : -1.0);
+      Vec3d w{easterly * east.x + tilt * north.x, easterly * east.y + tilt * north.y,
+              easterly * east.z + tilt * north.z};
+      const double wn = std::sqrt(dot(w, w));
+      wind[static_cast<size_t>(i) * 3 + 0] = static_cast<float>(w.x / wn);
+      wind[static_cast<size_t>(i) * 3 + 1] = static_cast<float>(w.y / wn);
+      wind[static_cast<size_t>(i) * 3 + 2] = static_cast<float>(w.z / wn);
+    }
+
+    // Upwind gather weights: flow from neighbor j into i where j's wind
+    // points toward i.
+    std::vector<float> upw(static_cast<size_t>(n) * 6, 0.0f);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
+      const Vec3d& pi = top.cell_center(i);
+      float sum = 0.0f;
+      const int deg = graph.degree[i];
+      for (int k = 0; k < deg; ++k) {
+        const int j = graph.nb[static_cast<size_t>(i) * 6 + k];
+        const Vec3d& pj = top.cell_center(j);
+        Vec3d d{pi.x - pj.x, pi.y - pj.y, pi.z - pj.z};
+        d = {d.x - pj.x * dot(d, pj), d.y - pj.y * dot(d, pj), d.z - pj.z * dot(d, pj)};
+        const double dn = std::sqrt(dot(d, d));
+        if (dn < 1e-12) {
+          continue;
+        }
+        const float a = static_cast<float>(
+            (wind[static_cast<size_t>(j) * 3 + 0] * d.x +
+             wind[static_cast<size_t>(j) * 3 + 1] * d.y +
+             wind[static_cast<size_t>(j) * 3 + 2] * d.z) / dn);
+        if (a > 0.0f) {
+          upw[static_cast<size_t>(i) * 6 + k] = a;
+          sum += a;
+        }
+      }
+      if (sum > 1e-9f) {
+        for (int k = 0; k < 6; ++k) {
+          upw[static_cast<size_t>(i) * 6 + k] /= sum;
+        }
+      }
+    }
+
+    // Rain fraction: convective (ITCZ + frontal band) + orographic lift.
+    std::vector<float> rainfrac(n);
+    std::vector<float> evap(n);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
+      const double lat_deg = lat_rad[i] * 180.0 / kPi;
+      double conv = 0.10 * std::exp(-std::pow(lat_deg / 12.0, 2)) +
+                    0.05 * std::exp(-std::pow((std::abs(lat_deg) - 52.0) / 14.0, 2)) +
+                    0.02;
+      double orog = 0.0;
+      const int deg = graph.degree[i];
+      for (int k = 0; k < deg; ++k) {
+        const float w = upw[static_cast<size_t>(i) * 6 + k];
+        if (w <= 0.0f) {
+          continue;
+        }
+        const int j = graph.nb[static_cast<size_t>(i) * 6 + k];
+        const float dz = std::max(0.0f, std::max(z[i], sea) - std::max(z[j], sea));
+        orog += w * dz / graph.edge_m[static_cast<size_t>(i) * 6 + k];
+      }
+      rainfrac[i] = static_cast<float>(std::clamp(conv + 15.0 * orog, 0.02, 0.9));
+      const double warm = std::clamp((temp_c[i] + 5.0) / 30.0, 0.0, 1.0);
+      evap[i] = static_cast<float>((z[i] <= sea) ? 0.6 + 0.4 * warm : 0.12 * warm);
+    }
+
+    // Fixed-point moisture advection.
+    std::vector<float> hum(n, 0.0f);
+    std::vector<float> hum_next(n, 0.0f);
+    for (int it = 0; it < 30; ++it) {
+      #pragma omp parallel for schedule(static)
+      for (int i = 0; i < n; ++i) {
+        float arrive = evap[i];
+        const int deg = graph.degree[i];
+        for (int k = 0; k < deg; ++k) {
+          const float w = upw[static_cast<size_t>(i) * 6 + k];
+          if (w > 0.0f) {
+            arrive += w * hum[graph.nb[static_cast<size_t>(i) * 6 + k]];
+          }
+        }
+        hum_next[i] = arrive * (1.0f - rainfrac[i]);
+      }
+      hum.swap(hum_next);
+    }
+    double rain_sum = 0.0;
+    double area_sum = 0.0;
+    #pragma omp parallel for schedule(static) reduction(+:rain_sum, area_sum)
+    for (int i = 0; i < n; ++i) {
+      float arrive = evap[i];
+      const int deg = graph.degree[i];
+      for (int k = 0; k < deg; ++k) {
+        const float w = upw[static_cast<size_t>(i) * 6 + k];
+        if (w > 0.0f) {
+          arrive += w * hum[graph.nb[static_cast<size_t>(i) * 6 + k]];
+        }
+      }
+      precip_mm[i] = rainfrac[i] * arrive;  // unnormalized
+      rain_sum += static_cast<double>(precip_mm[i]) * graph.area_m2[i];
+      area_sum += graph.area_m2[i];
+    }
+    const float scale = static_cast<float>(900.0 / std::max(1e-9, rain_sum / area_sum));
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
+      precip_mm[i] = std::min(5000.0f, precip_mm[i] * scale);
+      const float pet = std::clamp(45.0f * (temp_c[i] + 5.0f), 0.0f, 1800.0f);
+      runoff_mm[i] = (z[i] > sea) ? std::max(0.0f, precip_mm[i] - 0.55f * pet) + 15.0f
+                                  : 0.0f;
+      // Biome classification (ids match the studio palette).
+      const float t = temp_c[i];
+      const float p = precip_mm[i];
+      uint8_t b;
+      if (z[i] <= sea) {
+        b = 0;  // ocean
+      } else if (t < -12.0f) {
+        b = 1;  // ice
+      } else if (t < -2.0f) {
+        b = 2;  // tundra
+      } else if (z[i] > 3300.0f) {
+        b = 9;  // alpine
+      } else if (p < 220.0f) {
+        b = 8;  // desert
+      } else if (t < 6.0f) {
+        b = 3;  // boreal forest
+      } else if (t > 21.0f && p > 1600.0f) {
+        b = 6;  // tropical rainforest
+      } else if (t > 19.0f && p < 1100.0f) {
+        b = 7;  // savanna
+      } else if (p < 550.0f) {
+        b = 5;  // grassland
+      } else {
+        b = 4;  // temperate forest
+      }
+      biome[i] = b;
+      veg[i] = (b == 0 || b == 1 || b == 8)
+                   ? 0.0f
+                   : std::clamp(std::min(p / 1800.0f, (t + 8.0f) / 32.0f), 0.0f, 1.0f);
+    }
+  }
+
+  // ---- Hydrology: MFD accumulation weighted by runoff (discharge) ----
+  const std::vector<uint8_t> outlet = build_outlet_mask(z0, eff_sea);
   const FilledResult filled = fill_depressions(graph, z, outlet);
   std::vector<float> accum(n);
   for (int i = 0; i < n; ++i) {
-    accum[i] = graph.area_m2[i];
+    // Area-equivalent at 500 mm/yr runoff keeps the river threshold param's
+    // historical meaning while deserts lose rivers and wet belts gain them.
+    accum[i] = graph.area_m2[i] * (runoff_mm[i] / 500.0f);
   }
   {
     std::vector<int> order(n);
@@ -557,15 +755,20 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
       }
       ++comp_count;
     }
-    int ocean_comp = -1;
+    // Any below-sea component covering >= 2% of the sphere is an ocean
+    // (multi-basin worlds are normal); smaller ones are lakes.
+    double total_area = 0.0;
+    for (int i = 0; i < n; ++i) {
+      total_area += graph.area_m2[i];
+    }
+    std::vector<uint8_t> comp_is_ocean(comp_count, 0);
     for (int cid = 0; cid < comp_count; ++cid) {
-      if (ocean_comp < 0 || comp_area[cid] > comp_area[ocean_comp]) {
-        ocean_comp = cid;
-      }
+      comp_is_ocean[cid] =
+          (static_cast<double>(comp_area[cid]) >= 0.02 * total_area) ? 1 : 0;
     }
     for (int i = 0; i < n; ++i) {
       if (comp[i] >= 0) {
-        cell_ocean[i] = (comp[i] == ocean_comp) ? 1 : 0;
+        cell_ocean[i] = comp_is_ocean[comp[i]];
         cell_lake[i] = cell_ocean[i] ? 0 : 1;
       }
     }
@@ -584,6 +787,10 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   auto& ocean_layer = dataset.u8_layer("ocean_mask");
   auto& lake_layer = dataset.u8_layer("lake_mask");
   auto& river_layer = dataset.u8_layer("river_mask");
+  auto& temp_layer = dataset.float_layer("temperature_c");
+  auto& precip_layer = dataset.float_layer("precipitation_mm_yr");
+  auto& biome_layer = dataset.u8_layer("biome_id");
+  auto& veg_layer = dataset.float_layer("vegetation");
 
   const int w = domain.width();
   const int h = domain.height();
@@ -595,10 +802,16 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
       const auto lk = top.locate(p);
       double ez = 0.0;
       double ac = 0.0;
+      double tc = 0.0;
+      double pr = 0.0;
+      double vg = 0.0;
       int best = 0;
       for (int k = 0; k < 3; ++k) {
         ez += lk.weight[k] * z[lk.cell[k]];
         ac += lk.weight[k] * accum[lk.cell[k]];
+        tc += lk.weight[k] * temp_c[lk.cell[k]];
+        pr += lk.weight[k] * precip_mm[lk.cell[k]];
+        vg += lk.weight[k] * veg[lk.cell[k]];
         if (lk.weight[k] > lk.weight[best]) {
           best = k;
         }
@@ -608,6 +821,10 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
       accum_layer[idx] = static_cast<float>(ac);
       ocean_layer[idx] = cell_ocean[bc];
       lake_layer[idx] = cell_lake[bc];
+      temp_layer[idx] = static_cast<float>(tc);
+      precip_layer[idx] = static_cast<float>(pr);
+      veg_layer[idx] = static_cast<float>(vg);
+      biome_layer[idx] = (ez <= sea && cell_ocean[bc]) ? 0 : biome[bc];
       // Pixel-level threshold on the interpolated accumulation keeps rivers
       // thin instead of painting whole (coarser) geodesic cells.
       river_layer[idx] = (!ocean_layer[idx] && !lake_layer[idx] && cell_river[bc] &&
@@ -627,6 +844,15 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
     dataset.set_cell_layer("cell_elevation_m", f_top, z);
     dataset.set_cell_layer("cell_flow_accum_m2", f_top, accum);
     dataset.set_cell_layer("cell_ocean", f_top, std::move(ocean_f));
+    dataset.set_cell_layer("cell_temperature_c", f_top, temp_c);
+    dataset.set_cell_layer("cell_precip_mm", f_top, precip_mm);
+    dataset.set_cell_layer("cell_runoff_mm", f_top, runoff_mm);
+    dataset.set_cell_layer("cell_vegetation", f_top, veg);
+    std::vector<float> biome_f(n);
+    for (int i = 0; i < n; ++i) {
+      biome_f[i] = static_cast<float>(biome[i]);
+    }
+    dataset.set_cell_layer("cell_biome", f_top, std::move(biome_f));
   }
   std::cout << "  [geodesic-physics] F=" << f_top << " cells=" << n << " done\n";
 }

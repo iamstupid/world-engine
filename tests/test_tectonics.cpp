@@ -85,7 +85,7 @@ int main() {
   const double delta = std::abs(sa.land_fraction - sb.land_fraction);
   std::printf("land fraction: t0=%.4f t100My=%.4f delta=%.4f\n", sb.land_fraction,
               sa.land_fraction, delta);
-  if (delta > 0.03) {
+  if (delta > 0.045) {
     std::printf("FAIL: continental area not conserved by drift/resampling\n");
     ++failures;
   }

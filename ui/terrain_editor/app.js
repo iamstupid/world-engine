@@ -143,6 +143,12 @@ function colormapLayer(name, data) {
       const hcol = ((v * 2654435761) >>> 0) % 360;
       const [rr, gg, bb] = hslToRgb(hcol / 360, 0.55, 0.5);
       r = rr; g = gg; b = bb;
+    } else if (name === "temperature_c") {
+      const t = Math.min(1, Math.max(0, (v + 30) / 65));
+      r = 255 * t; g = 80 + 100 * (1 - Math.abs(t - 0.5) * 2); b = 255 * (1 - t);
+    } else if (name === "precipitation_mm_yr") {
+      const t = Math.min(1, Math.max(0, v / 2500));
+      r = 190 * (1 - t) + 20 * t; g = 160 * (1 - t) + 90 * t; b = 90 * (1 - t) + 220 * t;
     } else if (name.endsWith("mask") || name === "crust_type") {
       r = g = b = v > 0 ? 235 : 25;
     } else {

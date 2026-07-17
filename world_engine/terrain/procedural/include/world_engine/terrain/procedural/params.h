@@ -92,6 +92,10 @@ struct ErosionParams {
 struct HydrologyParams {
   float river_area_threshold_m2 = 8.0e9f;   // lower threshold = more visible rivers
   float sea_level_m = 0.0f;
+  // Drowned-coast flooding (plan addendum b): erosion carves valleys down to
+  // (sea_level - lowstand) as if during a glacial lowstand, then the ocean
+  // floods back to sea_level - rias, fjords and shelf archipelagos emerge.
+  float flood_lowstand_m = 120.0f;
 };
 
 struct PipelineParams {

@@ -366,7 +366,7 @@ void run_tectonics_stage(const PipelineParams& params, TerrainDataset& dataset) 
   FastNoiseLite continent_noise(params.seed + 9973);
   continent_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
   continent_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
-  continent_noise.SetFractalOctaves(4);
+  continent_noise.SetFractalOctaves(6);  // fractal crust boundary (coastline fix 1)
   continent_noise.SetFractalLacunarity(2.0f);
   continent_noise.SetFractalGain(0.5f);
   continent_noise.SetFrequency(static_cast<float>(tp.continent_noise_freq));
@@ -1187,21 +1187,42 @@ void run_combine_stage(const PipelineParams& params, TerrainDataset& dataset) {
   auto& base = dataset.float_layer("elevation_base_m");
   const float mix = static_cast<float>(std::clamp(params.tectonics.noise_detail_mix, 0.0, 1.0));
   const float sea = params.hydrology.sea_level_m;
+  const auto& domain = dataset.domain();
 
-  for (int i = 0; i < dataset.size(); ++i) {
-    // Tectonics drives the large scale; noise adds detail.
-    float z = tectonic[i] + noise[i] * mix;
+  // Coastline displacement noise (coastline fix 2): band-limited fractal
+  // displacement whose amplitude decays away from sea level - it fractalizes
+  // the sea-level contour without touching mountains or abyss.
+  FastNoiseLite coast_noise(params.seed + 4409);
+  coast_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+  coast_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+  coast_noise.SetFractalOctaves(5);
+  coast_noise.SetFrequency(static_cast<float>(params.noise.base_frequency * 3.0));
+  constexpr float kCoastAmpM = 220.0f;
+  constexpr float kCoastFalloffM = 350.0f;
 
-    // Continental shelf morphology (quadratic ramps near sea level).
-    if (z > sea && z < sea + 200.0f) {
-      const float t = (z - sea) / 200.0f;
-      z = sea + t * t * 200.0f;
-    } else if (z < sea && z > sea - 300.0f) {
-      const float t = (sea - z) / 300.0f;
-      z = sea - t * t * 300.0f;
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < domain.height(); ++y) {
+    for (int x = 0; x < domain.width(); ++x) {
+      const int i = domain.index(x, y);
+      // Tectonics drives the large scale; noise adds detail.
+      float z = tectonic[i] + noise[i] * mix;
+      const Vec3d p = domain.lat_lon_to_xyz(domain.center_lat_lon_deg(x, y));
+      const float cn = coast_noise.GetNoise(static_cast<float>(p.x),
+                                            static_cast<float>(p.y),
+                                            static_cast<float>(p.z));
+      z += kCoastAmpM * cn * std::exp(-std::abs(z - sea) / kCoastFalloffM);
+
+      // Continental shelf morphology (quadratic ramps near sea level).
+      if (z > sea && z < sea + 200.0f) {
+        const float t = (z - sea) / 200.0f;
+        z = sea + t * t * 200.0f;
+      } else if (z < sea && z > sea - 300.0f) {
+        const float t = (sea - z) / 300.0f;
+        z = sea - t * t * 300.0f;
+      }
+
+      base[i] = z;
     }
-
-    base[i] = z;
   }
 }
 

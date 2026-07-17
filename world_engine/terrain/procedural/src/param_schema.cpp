@@ -69,7 +69,9 @@ namespace {
     "Fixed-point EMA weight")                                                                     \
   X("hydrology", "river_area_threshold_m2", (p).hydrology.river_area_threshold_m2, F, 1e7,       \
     1e12, "River threshold (m^2 drainage)")                                                       \
-  X("hydrology", "sea_level_m", (p).hydrology.sea_level_m, F, -2000, 2000, "Sea level (m)")
+  X("hydrology", "sea_level_m", (p).hydrology.sea_level_m, F, -2000, 2000, "Sea level (m)")   \
+  X("hydrology", "flood_lowstand_m", (p).hydrology.flood_lowstand_m, F, 0, 500,               \
+    "Drowned-coast lowstand depth (m)")
 
 const char* type_name_I() { return "int"; }
 const char* type_name_D() { return "double"; }
