@@ -51,6 +51,8 @@ class Session:
         self.geo = None                    # M13 query index (lazy)
         self.astro_spec: dict = {}         # astronomy overrides (persisted)
         self.astro = None                  # (Universe, Observatory), lazy
+        self.civ_spec: dict | None = None  # species packs + era config (C-nodes)
+        self.phase_cache: dict = {}        # civ2 phase DAG cache
 
     def running(self) -> bool:
         return self.job is not None and self.job.is_alive()
@@ -101,8 +103,8 @@ def _run_generation(session: Session):
         session.astro = None
         session.error = None
         try:
-            import civ  # noqa: E402  (M11; optional at M7/M8 stage)
-            civ.generate_civilization(session)
+            import civ2  # noqa: E402  (M11/M17; optional at M7/M8 stage)
+            civ2.generate_civilization(session)
         except ImportError:
             pass
         _push(session, {"type": "done", "hash": result.get("hash", "")})
@@ -315,7 +317,8 @@ async def save_world(sid: str, request: Request):
     name = "".join(c for c in body.get("name", "world") if c.isalnum() or c in "-_")
     path = WORLDS_DIR / f"{name}.weworld"
     persistence.save_world(path, s.params, s.result, s.features, s.entities,
-                           store=s.store, astro_spec=s.astro_spec)
+                           store=s.store, astro_spec=s.astro_spec,
+                           civ_spec=s.civ_spec)
     return {"saved": path.name}
 
 
@@ -326,13 +329,15 @@ async def load_world(sid: str, request: Request):
     path = WORLDS_DIR / Path(body["name"]).name
     if not path.exists():
         raise HTTPException(404, "no such world")
-    params, result, features, entities, store, astro_spec = \
+    params, result, features, entities, store, astro_spec, civ_spec = \
         persistence.load_world(path)
     s.params, s.result = params, result
     s.features, s.entities = features, entities
     if store is not None:
         s.store = store
     s.astro_spec = astro_spec or {}
+    s.civ_spec = civ_spec
+    s.phase_cache = {}
     s.geo = None
     s.astro = None
     return {"loaded": path.name, "layers": sorted(result["layers"].keys())}
@@ -393,6 +398,53 @@ async def edit_entity(sid: str, eid: str, request: Request):
     for name in body.get("unlock", []):
         s.store.unlock(eid, name)
     return {"ok": True, "entity": s.store.snapshot(eid)}
+
+
+# ---- M17 civ v2: species packs + phase DAG (docs/MAP_SUITE_DESIGN.md §2) ----
+
+@app.get("/api/sessions/{sid}/civ/spec")
+def civ_spec_get(sid: str):
+    s = _session(sid)
+    import civ2
+    return {"spec": s.civ_spec or civ2.DEFAULT_SPEC,
+            "default": s.civ_spec is None,
+            "filter_fields": list(civ2.FILTER_FIELDS)}
+
+
+@app.put("/api/sessions/{sid}/civ/spec")
+async def civ_spec_put(sid: str, request: Request):
+    s = _session(sid)
+    spec = await request.json()
+    import civ2
+    errors = civ2.validate_spec(spec)
+    if errors:
+        return {"ok": False, "errors": errors}
+    lint = None
+    if s.result is not None and "cell_elevation_m" in s.result.get(
+            "cell_layers", {}):
+        ctx = civ2.Ctx(s)
+        lint = {sp["id"]: int((civ2.suitability(ctx, sp) > 0).sum())
+                for sp in spec.get("species", [])}
+    s.civ_spec = spec
+    return {"ok": True, "suitable_cells": lint}
+
+
+@app.post("/api/sessions/{sid}/civ/regenerate")
+def civ_regenerate(sid: str):
+    """Re-run only the civilization phase DAG (terrain untouched).
+    Unchanged phases replay from cache; the report says which ran."""
+    s = _session(sid)
+    if s.result is None:
+        raise HTTPException(409, "no terrain yet")
+    if s.running():
+        raise HTTPException(409, "generation already running")
+    import civ2
+    try:
+        report = civ2.generate_civilization(s)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    s.geo = None
+    return {"ok": True, "report": report}
 
 
 # ---- M13 queries ----
@@ -570,8 +622,8 @@ async def graph_run(sid: str, request: Request):
             s.astro = None
             s.error = None
             try:
-                import civ
-                civ.generate_civilization(s)
+                import civ2
+                civ2.generate_civilization(s)
             except Exception:  # noqa: BLE001 — graph may omit physics
                 pass
             _push(s, {"type": "done", "hash": out.get("hash", ""),
