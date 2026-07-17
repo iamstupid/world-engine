@@ -21,11 +21,14 @@ CREATE TABLE IF NOT EXISTS features (
 CREATE TABLE IF NOT EXISTS entities (
   id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, name TEXT, data TEXT,
   locked INT DEFAULT 0);
+CREATE TABLE IF NOT EXISTS store_entities (
+  id TEXT PRIMARY KEY, kind TEXT, attrs TEXT, locked TEXT);
+CREATE TABLE IF NOT EXISTS store_meta (k TEXT PRIMARY KEY, v TEXT);
 """
 
 
 def save_world(path: Path, params: dict, result: dict, features: list | None = None,
-               entities: list | None = None) -> None:
+               entities: list | None = None, store=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()
@@ -54,6 +57,11 @@ def save_world(path: Path, params: dict, result: dict, features: list | None = N
                 "INSERT INTO entities (kind, name, data, locked) VALUES (?,?,?,?)",
                 (ent["kind"], ent.get("name", ""), json.dumps(ent),
                  1 if ent.get("locked") else 0))
+        if store is not None:
+            rows, meta, log = store.to_rows()
+            con.executemany("INSERT INTO store_entities VALUES (?,?,?,?)", rows)
+            con.execute("INSERT INTO store_meta VALUES ('meta', ?)", (meta,))
+            con.execute("INSERT INTO store_meta VALUES ('log', ?)", (log,))
         con.commit()
     finally:
         con.close()
@@ -81,6 +89,16 @@ def load_world(path: Path) -> tuple[dict, dict, list, list]:
                     con.execute("SELECT geojson FROM features")]
         entities = [json.loads(row[0]) for row in
                     con.execute("SELECT data FROM entities")]
-        return params, result, features, entities
+        store = None
+        try:
+            rows = list(con.execute("SELECT * FROM store_entities"))
+            meta = dict(con.execute("SELECT k, v FROM store_meta"))
+            if rows or meta:
+                from worldstore import WorldStore
+                store = WorldStore.from_rows(rows, meta.get("meta", "{}"),
+                                             meta.get("log", "[]"))
+        except Exception:  # noqa: BLE001  (older files without store tables)
+            store = None
+        return params, result, features, entities, store
     finally:
         con.close()

@@ -17,6 +17,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
 import weterrain
+from worldstore import stable_id
 
 # ---------------------------------------------------------------- names ----
 
@@ -254,6 +255,7 @@ def generate_civilization(session) -> None:
         features.append(feature("border", {"type": "MultiPoint", "coordinates": coords}, {}))
 
     # ---- roads: MST over top settlements, least-cost paths ----
+    road_mask = np.zeros(n, np.float32)
     tops = [chosen[i] for i in order2[: min(28, len(chosen))]]
     if len(tops) >= 2:
         pts = centers[tops]
@@ -287,7 +289,58 @@ def generate_civilization(session) -> None:
             path.append(int(tops[a]))
             coords = [[round(float(lonlat[i, 0]), 3), round(float(lonlat[i, 1]), 3)]
                       for i in reversed(path)]
+            road_mask[path] = 1.0
             features.append(feature("road", {"type": "LineString", "coordinates": coords}, {}))
+
+    # ---- cell layers for the query engine (M13): polity/culture identity is
+    # keyed by capital/hearth CELL id, so describe() can resolve entities by
+    # stable id without side tables ----
+    pol_cap_cell = np.array(caps, np.float32)[polity_of]
+    pol_cap_cell[ocean] = -1.0
+    cul_hearth_cell = np.array(hearths, np.float32)[culture_of]
+    result["cell_layers"]["cell_polity_capital"] = {
+        "frequency": freq, "dtype": "f32", "data": pol_cap_cell.tobytes()}
+    result["cell_layers"]["cell_culture_hearth"] = {
+        "frequency": freq, "dtype": "f32", "data": cul_hearth_cell.tobytes()}
+    result["cell_layers"]["cell_road"] = {
+        "frequency": freq, "dtype": "f32", "data": road_mask.tobytes()}
+
+    # ---- entity store merge (M12): regeneration never clobbers user edits ----
+    store = getattr(session, "store", None)
+    if store is not None:
+        records = []
+        for k in range(n_cult):
+            records.append({"kind": "culture", "gen_key": int(hearths[k]),
+                            "attrs": {"name": culture_names[k],
+                                      "hearth_cell": int(hearths[k])}})
+        for pi, cap in enumerate(caps):
+            records.append({"kind": "polity", "gen_key": int(cap),
+                            "attrs": {"name": polity_names[pi],
+                                      "capital_cell": int(cap),
+                                      "culture_id": stable_id(
+                                          "culture", int(hearths[int(culture_of[cap])]))}})
+        for idx, cell in enumerate(chosen):
+            records.append({"kind": "settlement", "gen_key": int(cell),
+                            "attrs": {
+                                "name": namegens[int(culture_of[cell])](cell),
+                                "rank": int(ranks[idx]), "cell": int(cell),
+                                "lon": float(lonlat[cell, 0]),
+                                "lat": float(lonlat[cell, 1]),
+                                "polity_id": stable_id("polity",
+                                                       int(caps[int(polity_of[cell])])),
+                                "culture_id": stable_id("culture",
+                                                        int(hearths[int(culture_of[cell])])),
+                            }})
+        store.apply_generation(records)
+        # Settlement features reflect the MERGED names (user renames survive).
+        features = [f for f in features if f["kind"] != "settlement"]
+        for s in store.find("settlement"):
+            features.append(feature(
+                "settlement",
+                {"type": "Point", "coordinates": [s["lon"], s["lat"]]},
+                {"name": s["name"], "rank": s.get("rank", 2),
+                 "polity": store.get(s.get("polity_id", ""), "name"),
+                 "culture": store.get(s.get("culture_id", ""), "name")}))
 
     session.features = features
     session.entities = entities

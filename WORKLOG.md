@@ -209,3 +209,31 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   and rendered as studio overlays.
 - Full e2e: 8/8 passing (form, generation, globe/map pixels, layers, query,
   overlays, save/load, paint round trip).
+
+---
+
+# Entity Store & Query Engine (M12-M13 backend)
+
+## Date: 2026-07-17
+
+- worldstore.py (M12): stable-id entities with gen/user attribute layers,
+  field/entity locks, validity intervals + eras + custom calendars, edit
+  log, and apply_generation merge semantics (user edits and locks survive
+  regeneration; absent gen entities retire unless user-touched; stable ids
+  from (namespace, kind, gen_key)). Serialized into .weworld
+  (store_entities/store_meta tables).
+- geoquery.py (M13): GeoIndex over the geodesic cell graph - route()
+  travel days by mode (walk/horse/cart/ship; slope/biome/road/river-
+  crossing costs) with narrative itineraries and polity transit notes;
+  reachable() isochrones; describe() context packs resolving polity/
+  culture/nearest settlement through the store (as_of-aware); news_arrival()
+  courier-vs-ship information lag; viewshed() horizon + visible peaks.
+  Polity/culture identity rides in cell layers as capital/hearth cell ids.
+- civ.py now writes cell_polity_capital / cell_culture_hearth / cell_road
+  layers and merges all generated entities through the store; settlement
+  features render MERGED names (author renames flow to the map).
+- Server: /entities (find + as_of), PUT /entities/{id} (edit + lock),
+  /route /describe /reachable /news /viewshed endpoints.
+- Tests: tests/py 14/14 (store semantics, calendars, merge protection,
+  route/describe/news/viewshed gates, end-to-end regen-merge); e2e 8/8
+  unchanged.

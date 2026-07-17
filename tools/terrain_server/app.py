@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO / "build-linux"))
 import weterrain  # noqa: E402
 
 import persistence  # noqa: E402
+from worldstore import WorldStore  # noqa: E402
 
 WORLDS_DIR = REPO / "worlds"
 UI_DIR = REPO / "ui" / "terrain_editor"
@@ -46,6 +47,8 @@ class Session:
         self.queue: asyncio.Queue = asyncio.Queue()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.paint: dict[str, bytes] = {}  # M10 override layers (raw f32)
+        self.store = WorldStore()          # M12 entity store
+        self.geo = None                    # M13 query index (lazy)
 
     def running(self) -> bool:
         return self.job is not None and self.job.is_alive()
@@ -89,6 +92,7 @@ def _run_generation(session: Session):
         result = weterrain.generate(params, progress=progress, cancel=cancel,
                                     paint=paint)
         session.result = result
+        session.geo = None
         session.error = None
         try:
             import civ  # noqa: E402  (M11; optional at M7/M8 stage)
@@ -220,7 +224,8 @@ async def save_world(sid: str, request: Request):
     body = await request.json()
     name = "".join(c for c in body.get("name", "world") if c.isalnum() or c in "-_")
     path = WORLDS_DIR / f"{name}.weworld"
-    persistence.save_world(path, s.params, s.result, s.features, s.entities)
+    persistence.save_world(path, s.params, s.result, s.features, s.entities,
+                           store=s.store)
     return {"saved": path.name}
 
 
@@ -231,9 +236,12 @@ async def load_world(sid: str, request: Request):
     path = WORLDS_DIR / Path(body["name"]).name
     if not path.exists():
         raise HTTPException(404, "no such world")
-    params, result, features, entities = persistence.load_world(path)
+    params, result, features, entities, store = persistence.load_world(path)
     s.params, s.result = params, result
     s.features, s.entities = features, entities
+    if store is not None:
+        s.store = store
+    s.geo = None
     return {"loaded": path.name, "layers": sorted(result["layers"].keys())}
 
 
@@ -271,10 +279,65 @@ def get_features(sid: str, kind: str | None = None):
 
 
 @app.get("/api/sessions/{sid}/entities")
-def get_entities(sid: str, kind: str | None = None):
+def get_entities(sid: str, kind: str | None = None, name: str | None = None,
+                 as_of: float | None = None):
     s = _session(sid)
-    return {"entities": [e for e in s.entities
-                         if kind is None or e.get("kind") == kind]}
+    return {"entities": s.store.find(kind=kind, name_like=name, as_of=as_of)}
+
+
+@app.put("/api/sessions/{sid}/entities/{eid}")
+async def edit_entity(sid: str, eid: str, request: Request):
+    s = _session(sid)
+    body = await request.json()
+    if eid not in s.store.entities:
+        raise HTTPException(404, "no such entity")
+    for name, value in body.get("attrs", {}).items():
+        s.store.set_attr(eid, name, value,
+                         valid_from=body.get("valid_from"),
+                         valid_to=body.get("valid_to"))
+    for name in body.get("lock", []):
+        s.store.lock(eid, name)
+    for name in body.get("unlock", []):
+        s.store.unlock(eid, name)
+    return {"ok": True, "entity": s.store.snapshot(eid)}
+
+
+# ---- M13 queries ----
+
+def _geo(s: Session):
+    if s.result is None:
+        raise HTTPException(409, "no data yet")
+    if s.geo is None:
+        import geoquery
+        s.geo = geoquery.GeoIndex(s)
+    return s.geo
+
+
+@app.get("/api/sessions/{sid}/route")
+def api_route(sid: str, alat: float, alon: float, blat: float, blon: float,
+              mode: str = "horse"):
+    return _geo(_session(sid)).route((alon, alat), (blon, blat), mode)
+
+
+@app.get("/api/sessions/{sid}/describe")
+def api_describe(sid: str, lat: float, lon: float, as_of: float | None = None):
+    return _geo(_session(sid)).describe(lon, lat, as_of)
+
+
+@app.get("/api/sessions/{sid}/reachable")
+def api_reachable(sid: str, lat: float, lon: float, days: float,
+                  mode: str = "horse"):
+    return _geo(_session(sid)).reachable((lon, lat), days, mode)
+
+
+@app.get("/api/sessions/{sid}/news")
+def api_news(sid: str, elat: float, elon: float, llat: float, llon: float):
+    return _geo(_session(sid)).news_arrival((elon, elat), (llon, llat))
+
+
+@app.get("/api/sessions/{sid}/viewshed")
+def api_viewshed(sid: str, lat: float, lon: float):
+    return _geo(_session(sid)).viewshed(lon, lat)
 
 
 @app.get("/")
