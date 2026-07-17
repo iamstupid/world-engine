@@ -272,6 +272,49 @@ def test_galaxy_morphology_spiral_vs_cluster():
     assert r50 / r90 < 0.6  # King-profile concentration (uniform ~0.82)
 
 
+# ----------------------------------------- companions & proper motion -------
+
+def test_companion_second_sun():
+    single = astro.build_universe(42, 360.0)[1].sky(20, 0, 137.4)
+    assert "companion_star" not in single
+    universe, obs = astro.build_universe(42, 360.0, {
+        "home_companion": {"mass_ratio": 0.5, "a_au": 30.0, "e": 0.1}})
+    s = obs.sky(20, 0, 137.4)
+    assert "companion_star" in s
+    assert s["companion_star"]["mag"] < -10  # vastly brighter than any star
+    d0, _ = obs.companion_dir_mag(0.0)
+    period = universe.home_companion_orbit["period_days"]
+    d1, _ = obs.companion_dir_mag(period / 2.0)
+    shift = math.degrees(math.acos(max(-1.0, min(1.0, float(d0 @ d1)))))
+    assert shift > 10.0  # the second sun moves along its orbit
+
+
+def test_proper_motion_drifts_charts(uo):
+    universe, _ = uo
+    base = universe.sky_from(0, epoch_yr=0.0)
+    late = universe.sky_from(0, epoch_yr=2000.0)
+    mid = universe.sky_from(0, epoch_yr=200.0)
+    def unit(v):
+        v = np.asarray(v, dtype=float)
+        return v / np.linalg.norm(v)
+
+    by_id = {s["sys"]: unit(s["dir"]) for s in base["stars"]}
+
+    def max_shift(sky):
+        best = 0.0
+        for s in sky["stars"]:
+            if s["sys"] in by_id:
+                c = float(np.clip(np.dot(by_id[s["sys"]], unit(s["dir"])), -1, 1))
+                best = max(best, math.degrees(math.acos(c)))
+        return best
+
+    assert max_shift(base) < 1e-4  # acos precision floor, no real drift
+    drift_mid = max_shift(mid)
+    drift_late = max_shift(late)
+    assert drift_late > 0.05          # visible on charts across eras
+    assert drift_late > drift_mid     # grows with time
+
+
 # ------------------------------------------------- store integration --------
 
 def test_store_records_merge_and_cross_generator_isolation(uo):

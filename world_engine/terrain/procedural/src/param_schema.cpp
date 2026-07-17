@@ -54,6 +54,15 @@ namespace {
     "Recent-uplift EMA window (My)")                                                              \
   X("tectonics", "noise_detail_mix", (p).tectonics.noise_detail_mix, D, 0, 1,                    \
     "Detail noise blend")                                                                         \
+  X("amplify", "enable", (p).amplify.enable, B, 0, 1, "Attribute-modulated detail")              \
+  X("amplify", "base_frequency", (p).amplify.base_frequency, D, 4, 200,                          \
+    "Detail band start frequency")                                                                \
+  X("amplify", "octaves", (p).amplify.octaves, I, 1, 9, "Detail octave cap")                     \
+  X("amplify", "gain", (p).amplify.gain, D, 0.3, 0.7, "Detail fractal gain")                     \
+  X("amplify", "base_amplitude_m", (p).amplify.base_amplitude_m, D, 0, 500,                      \
+    "Lowland detail amplitude (m)")                                                               \
+  X("amplify", "mountain_amplitude_m", (p).amplify.mountain_amplitude_m, D, 0, 2000,             \
+    "Mountain ridged amplitude (m)")                                                              \
   X("erosion", "fixed_point_iterations", (p).erosion.fixed_point_iterations, I, 1, 64,           \
     "Fixed-point iterations")                                                                     \
   X("erosion", "multigrid_levels", (p).erosion.multigrid_levels, I, 1, 8, "Multigrid levels")    \
@@ -67,6 +76,10 @@ namespace {
     "Critical slope (tan)")                                                                       \
   X("erosion", "fixed_point_ema", (p).erosion.fixed_point_ema, D, 0.05, 1,                       \
     "Fixed-point EMA weight")                                                                     \
+  X("erosion", "discontinuity_iterations", (p).erosion.discontinuity_iterations, I, 0, 200,      \
+    "Discontinuity-correction steps (Tzathas 5.3)")                                               \
+  X("erosion", "discontinuity_lr", (p).erosion.discontinuity_lr, D, 0.001, 0.1,                  \
+    "Discontinuity-correction step size")                                                         \
   X("hydrology", "river_area_threshold_m2", (p).hydrology.river_area_threshold_m2, F, 1e7,       \
     1e12, "River threshold (m^2 drainage)")                                                       \
   X("hydrology", "sea_level_m", (p).hydrology.sea_level_m, F, -2000, 2000, "Sea level (m)")   \

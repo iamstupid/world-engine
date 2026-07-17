@@ -201,6 +201,52 @@ def get_layer(sid: str, name: str):
                              "X-Height": str(s.result["height"])})
 
 
+@app.get("/api/sessions/{sid}/cell_layer/{name}")
+def get_cell_layer(sid: str, name: str):
+    s = _session(sid)
+    if s.result is None or name not in s.result.get("cell_layers", {}):
+        raise HTTPException(404, "cell layer not available")
+    entry = s.result["cell_layers"][name]
+    return Response(content=entry["data"], media_type="application/octet-stream",
+                    headers={"X-Dtype": entry["dtype"],
+                             "X-Frequency": str(entry["frequency"])})
+
+
+@app.get("/api/sessions/{sid}/cell_atlas/{name}")
+def get_cell_atlas(sid: str, name: str):
+    """Rhombus-atlas view (2F x 5F f32 image + the two pole values)."""
+    s = _session(sid)
+    if s.result is None or name not in s.result.get("cell_layers", {}):
+        raise HTTPException(404, "cell layer not available")
+    import atlas
+    freq, img, poles = atlas.pack_cell_atlas(s.result, name)
+    return Response(content=img.tobytes(), media_type="application/octet-stream",
+                    headers={"X-Dtype": "f32", "X-Frequency": str(freq),
+                             "X-Width": str(5 * freq), "X-Height": str(2 * freq),
+                             "X-Poles": f"{float(poles[0])},{float(poles[1])}"})
+
+
+@app.get("/api/sessions/{sid}/refine")
+def api_refine(sid: str, lon0: float, lat0: float, lon1: float, lat1: float,
+               scale: int = 4, iterations: int = 3):
+    """M11.5 region refinement: higher-resolution tile with boundary
+    conditions from the global solution (f32 row-major, north-up)."""
+    s = _session(sid)
+    if s.result is None:
+        raise HTTPException(409, "no data yet")
+    import refine as refine_mod
+    out = refine_mod.refine_tile(s, lon0, lat0, lon1, lat1, scale=scale,
+                                 iterations=min(int(iterations), 8))
+    return Response(content=out["tile"].tobytes(),
+                    media_type="application/octet-stream",
+                    headers={"X-Dtype": "f32",
+                             "X-Width": str(out["width"]),
+                             "X-Height": str(out["height"]),
+                             "X-Bbox": f"{out['lon0']},{out['lat0']},"
+                                       f"{out['lon1']},{out['lat1']}",
+                             "X-Base-Layer": out["base_layer"]})
+
+
 @app.get("/api/sessions/{sid}/query")
 def point_query(sid: str, lat: float, lon: float):
     s = _session(sid)
@@ -413,11 +459,11 @@ def api_astro_system(sid: str, idx: int):
 
 
 @app.get("/api/sessions/{sid}/astro/sky_from")
-def api_astro_sky_from(sid: str, system: int = 0):
+def api_astro_sky_from(sid: str, system: int = 0, epoch_yr: float = 0.0):
     universe, _ = _astro(_session(sid))
     if not (0 <= system < universe.n_systems):
         raise HTTPException(404, "no such system")
-    return universe.sky_from(system)
+    return universe.sky_from(system, epoch_yr=epoch_yr)
 
 
 @app.get("/api/sessions/{sid}/astro/events")

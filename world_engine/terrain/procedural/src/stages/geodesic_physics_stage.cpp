@@ -29,10 +29,23 @@
 #include "FastNoiseLite.h"
 #include "world_engine/terrain/geodesic_grid.h"
 
+#ifdef _OPENMP
+#include <parallel/algorithm>
+#endif
+
 namespace world_engine::terrain::procedural::stages {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+
+template <typename It, typename Cmp>
+void par_stable_sort(It first, It last, Cmp cmp) {
+#ifdef _OPENMP
+  __gnu_parallel::stable_sort(first, last, cmp);
+#else
+  std::stable_sort(first, last, cmp);
+#endif
+}
 
 uint64_t splitmix64(uint64_t x) {
   x += 0x9e3779b97f4a7c15ULL;
@@ -296,7 +309,7 @@ void solve_level(const CellGraph& graph, const ErosionParams& eparams, int seed,
 
     // Drainage accumulation in descending order of filled elevation.
     std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    par_stable_sort(order.begin(), order.end(), [&](int a, int b) {
       return filled.filled_z[a] > filled.filled_z[b];
     });
     for (int i = 0; i < n; ++i) {
@@ -385,6 +398,149 @@ void solve_level(const CellGraph& graph, const ErosionParams& eparams, int seed,
   }
 }
 
+// Optimization-based altitude correction (Tzathas 5.3): the analytical
+// solution leaves cliff seams between adjacent cells that drain to
+// different base levels. With the river network fixed, gradient-descend in
+// elevation-difference space d_c = z(c) - z(receiver(c)) >= 0:
+//   L = lam_r * sum (d - d~)^2/2                       (keep the solution)
+//     + lam_d * sum max(z(c) - z(cn) - d~_c, 0)^2/2    (kill the seams)
+// over non-connected neighbors cn. Elevations are reconstructed by chain
+// accumulation, so each step propagates along the whole river; the
+// discontinuity gradient is divided by the upstream node count to prevent
+// explosion (paper Section 5.3).
+void optimize_discontinuities(const CellGraph& graph, const ErosionParams& eparams,
+                              int seed, const std::vector<float>& z0,
+                              float sea_level_m, std::vector<float>& z) {
+  const int iters = eparams.discontinuity_iterations;
+  if (iters <= 0) {
+    return;
+  }
+  const int n = static_cast<int>(z.size());
+  std::vector<float> rnd(n);
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n; ++i) {
+    rnd[i] = rand01(static_cast<uint64_t>(seed) * 2246822519ULL + 977ULL +
+                    static_cast<uint64_t>(i));
+  }
+  const std::vector<uint8_t> outlet = build_outlet_mask(z0, sea_level_m);
+  const FilledResult filled = fill_depressions(graph, z, outlet);
+  std::vector<int32_t> receiver;
+  std::vector<float> receiver_dist;
+  build_receivers(graph, filled.filled_z, filled.flood_parent, outlet, rnd, receiver,
+                  receiver_dist);
+
+  std::vector<int> order(n);
+  std::iota(order.begin(), order.end(), 0);
+  par_stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    return filled.filled_z[a] > filled.filled_z[b];
+  });
+
+  float zmin = z[0];
+  float zmax = z[0];
+  for (int i = 0; i < n; ++i) {
+    zmin = std::min(zmin, z[i]);
+    zmax = std::max(zmax, z[i]);
+  }
+  const float range = std::max(1.0f, zmax - zmin);
+  const float inv = 1.0f / range;
+
+  std::vector<float> d_target(n, 0.0f);
+  std::vector<float> zn(n);
+  std::vector<float> ncount(n, 1.0f);
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n; ++i) {
+    zn[i] = (z[i] - zmin) * inv;
+    const int r = receiver[i];
+    d_target[i] = (outlet[i] || r == i) ? 0.0f
+                                        : std::max(0.0f, (z[i] - z[r]) * inv);
+  }
+  std::vector<float> d = d_target;
+  for (int oi = 0; oi < n; ++oi) {  // upstream first: accumulate node counts
+    const int c = order[oi];
+    const int r = receiver[c];
+    if (!outlet[c] && r != c) {
+      ncount[r] += ncount[c];
+    }
+  }
+
+  const float lam_r = 1.0f / 3.0f;
+  const float lam_d = 2.0f / 3.0f;
+  const float lr = static_cast<float>(eparams.discontinuity_lr);
+  std::vector<float> gz(n);
+  std::vector<float> gsum(n);
+
+  for (int it = 0; it < iters; ++it) {
+    // Reconstruct elevations by chain accumulation (ascending filled order;
+    // equal-height lake ties settle across iterations, as in solve_level).
+    for (int oi = n - 1; oi >= 0; --oi) {
+      const int c = order[oi];
+      const int r = receiver[c];
+      if (!outlet[c] && r != c) {
+        zn[c] = zn[r] + d[c];
+      }
+    }
+    // Pure gather form (each cell sums both sides of its pair violations):
+    // no atomics, so the result is bitwise deterministic under OpenMP.
+    #pragma omp parallel for schedule(static)
+    for (int c = 0; c < n; ++c) {
+      float g = 0.0f;
+      const int deg = graph.degree[c];
+      for (int k = 0; k < deg; ++k) {
+        const int j = graph.nb[static_cast<size_t>(c) * 6 + k];
+        if (j == receiver[c] || receiver[j] == c) {
+          continue;  // connected neighbors are not discontinuities
+        }
+        if (!outlet[c]) {
+          const float v = zn[c] - zn[j] - d_target[c];  // c as the high cell
+          if (v > 0.0f) {
+            g += lam_d * v;
+          }
+        }
+        if (!outlet[j]) {
+          const float w = zn[j] - zn[c] - d_target[j];  // c as the low cell
+          if (w > 0.0f) {
+            g -= lam_d * w;
+          }
+        }
+      }
+      gz[c] = g;
+    }
+    // dL/dd_c = lam_r (d_c - d~_c) + sum of dL/dz over the subtree above c.
+    gsum = gz;
+    for (int oi = 0; oi < n; ++oi) {
+      const int c = order[oi];
+      const int r = receiver[c];
+      if (!outlet[c] && r != c) {
+        gsum[r] += gsum[c];
+      }
+    }
+    #pragma omp parallel for schedule(static)
+    for (int c = 0; c < n; ++c) {
+      if (outlet[c] || receiver[c] == c) {
+        continue;
+      }
+      const float g = lam_r * (d[c] - d_target[c]) + gsum[c] / ncount[c];
+      d[c] = std::max(0.0f, d[c] - lr * g);
+    }
+  }
+
+  for (int pass = 0; pass < 2; ++pass) {  // settle lake ties
+    for (int oi = n - 1; oi >= 0; --oi) {
+      const int c = order[oi];
+      const int r = receiver[c];
+      if (!outlet[c] && r != c) {
+        zn[c] = zn[r] + d[c];
+      }
+    }
+  }
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n; ++i) {
+    if (!outlet[i]) {
+      z[i] = zmin + zn[i] * range;
+    }
+  }
+}
+
 std::vector<int> distribute_iterations(int total, int levels) {
   const int safe_levels = std::max(1, levels);
   int remaining = std::max(1, total);
@@ -466,6 +622,41 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
     graph.build(*grid, domain.radius_m());
     const int n = grid->cell_count();
 
+    // Attribute-modulated amplification (plan addendum b): octaves are
+    // capped so the finest wavelength stays ~3 cell spacings at this level
+    // (edge ~ 7980/F km, noise wavelength ~ R/freq); coarse levels see a
+    // truncation of the same continuous field, which keeps the multigrid
+    // hierarchy consistent. At coarse physics grids the cap reaches zero
+    // and the stage behaves exactly as before amplification existed.
+    int amp_octaves = 0;
+    if (params.amplify.enable && params.amplify.base_amplitude_m +
+                                     params.amplify.mountain_amplitude_m > 0.0) {
+      const double q_max = static_cast<double>(f) / 3.76;
+      const double lac = std::max(1.2, params.amplify.lacunarity);
+      const double raw =
+          std::floor(std::log(q_max / std::max(1.0, params.amplify.base_frequency)) /
+                     std::log(lac)) + 1.0;
+      amp_octaves = std::clamp(static_cast<int>(raw), 0, params.amplify.octaves);
+    }
+    FastNoiseLite amp_fbm(params.seed + 9203);
+    FastNoiseLite amp_ridge(params.seed + 3907);
+    if (amp_octaves > 0) {
+      amp_fbm.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+      amp_fbm.SetFractalType(FastNoiseLite::FractalType_FBm);
+      amp_fbm.SetFractalOctaves(amp_octaves);
+      amp_fbm.SetFractalLacunarity(static_cast<float>(params.amplify.lacunarity));
+      amp_fbm.SetFractalGain(static_cast<float>(params.amplify.gain));
+      amp_fbm.SetFrequency(static_cast<float>(params.amplify.base_frequency));
+      amp_ridge.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+      amp_ridge.SetFractalType(FastNoiseLite::FractalType_Ridged);
+      amp_ridge.SetFractalOctaves(std::min(amp_octaves, 5));
+      amp_ridge.SetFractalLacunarity(static_cast<float>(params.amplify.lacunarity));
+      amp_ridge.SetFractalGain(0.55f);
+      amp_ridge.SetFrequency(static_cast<float>(params.amplify.base_frequency * 1.7));
+    }
+    const float amp_base = static_cast<float>(params.amplify.base_amplitude_m);
+    const float amp_mtn = static_cast<float>(params.amplify.mountain_amplitude_m);
+
     z0.resize(n);
     uplift.resize(n);
     const auto paint_it = params.paint_layers.find("uplift_paint");
@@ -478,6 +669,22 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
       uplift[i] = sample_raster(domain, uplift_raster, c);
       if (uplift_paint != nullptr) {
         uplift[i] += std::max(0.0f, sample_paint(*uplift_paint, c));
+      }
+      if (amp_octaves > 0) {
+        // Mountain-ness from relief and recent uplift: orogens get ridged
+        // roughness, plains fBm, abyssal floor a faint remnant.
+        const float rel = std::clamp((z0[i] - sea) / 2200.0f, 0.0f, 1.0f);
+        const float uf = std::clamp(uplift[i] / 2.0e-4f, 0.0f, 1.0f);
+        const float m = std::min(1.0f, 0.55f * rel + 0.6f * uf);
+        const float px = static_cast<float>(c.x);
+        const float py = static_cast<float>(c.y);
+        const float pz = static_cast<float>(c.z);
+        float detail = amp_base * (1.0f - 0.5f * m) * amp_fbm.GetNoise(px, py, pz) +
+                       amp_mtn * m * amp_ridge.GetNoise(px, py, pz);
+        if (z0[i] < sea - 150.0f) {
+          detail *= 0.3f;
+        }
+        z0[i] += detail;
       }
     }
 
@@ -528,6 +735,8 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   const GeodesicGrid& top = *prev_grid;
   const int n = top.cell_count();
   std::vector<float>& z = z_guess;
+
+  optimize_discontinuities(graph, params.erosion, params.seed, z0, eff_sea, z);
 
   // Deep-ocean bathymetry is untouched by the solver; the lowstand band
   // [eff_sea, sea] keeps its carved valleys and floods below.
@@ -728,7 +937,7 @@ void run_geodesic_physics_stage(const PipelineParams& params, TerrainDataset& da
   {
     std::vector<int> order(n);
     std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    par_stable_sort(order.begin(), order.end(), [&](int a, int b) {
       return filled.filled_z[a] > filled.filled_z[b];
     });
     for (int idx : order) {

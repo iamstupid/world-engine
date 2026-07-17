@@ -81,6 +81,23 @@ struct TectonicsParams {
   double noise_detail_mix = 0.55;
 };
 
+// Attribute-modulated detail amplification (plan addendum b): when the
+// geodesic physics grid outresolves the export raster, cells gain fractal
+// detail evaluated directly on the sphere. Amplitude is modulated by
+// tectonic attributes (uplift rate, relief): young orogens get ridged
+// roughness, plains and cratons stay smooth. The octave count is capped
+// per multigrid level so each level only sees detail it can resolve.
+struct AmplificationParams {
+  bool enable = true;
+  double base_frequency = 26.0;      // continues where the raster noise stops
+  int octaves = 6;                   // upper cap; per-level cap from spacing
+  double gain = 0.5;
+  double lacunarity = 2.0;
+  double base_amplitude_m = 60.0;    // lowland fBm amplitude
+  double mountain_amplitude_m = 420.0;  // extra ridged amplitude at full
+                                        // mountain-ness (uplift/relief)
+};
+
 struct ErosionParams {
   int fixed_point_iterations = 6;
   int multigrid_levels = 5;
@@ -99,6 +116,11 @@ struct ErosionParams {
   // Fixed-point damping (Tzathas 5.1): exponential moving average between
   // iterations prevents oscillation at small t.
   double fixed_point_ema = 0.65;    // weight of the fresh solution
+  // Optimization-based altitude correction (Tzathas 5.3): gradient descent
+  // in elevation-difference space removes cliff seams between cells that
+  // drain to different outlets. 0 disables the pass.
+  int discontinuity_iterations = 16;
+  double discontinuity_lr = 0.01;
 };
 
 struct HydrologyParams {
@@ -122,6 +144,7 @@ struct PipelineParams {
 
   NoiseParams noise{};
   TectonicsParams tectonics{};
+  AmplificationParams amplify{};
   ErosionParams erosion{};
   HydrologyParams hydrology{};
 

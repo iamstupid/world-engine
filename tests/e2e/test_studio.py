@@ -63,7 +63,7 @@ def set_param(page, key, value):
 
 
 def test_01_schema_form_renders(page):
-    expect(page.locator("#params .group")).to_have_count(5, timeout=15000)
+    expect(page.locator("#params .group")).to_have_count(6, timeout=15000)
     assert page.locator("#params input").count() >= 30
     page.screenshot(path=str(ART / "01_form.png"))
 

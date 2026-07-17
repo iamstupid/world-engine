@@ -100,47 +100,12 @@ def generate_civilization(session) -> None:
     cols = nb.ravel()[valid.ravel()]
     edge_km = np.linalg.norm(centers[rows] - centers[cols], axis=1) * 6371.0
 
-    # ---- vector rivers ----
+    # ---- vector rivers (rivers.py: extraction + meanders + stream burning
+    # + sub-threshold tributaries; plan addendum c) ----
+    import rivers as rivers_mod
     river_thr = float(session.params.get("hydrology.river_area_threshold_m2", 8e9))
-    is_river = (accum > river_thr) & land
-    # downstream pointer: lower neighbor with max accumulation
-    recv = np.full(n, -1, np.int64)
-    z_nb = np.where(valid, z[np.clip(nb, 0, n - 1)], np.inf)
-    acc_nb = np.where(valid & (z_nb < z[:, None]), accum[np.clip(nb, 0, n - 1)], -1.0)
-    has_lower = acc_nb.max(axis=1) > 0
-    recv[has_lower] = nb[np.arange(n), acc_nb.argmax(axis=1)][has_lower]
-
-    upstream_max = np.zeros(n, np.float32)
-    rr = recv[is_river.nonzero()[0]]
-    for i in is_river.nonzero()[0]:
-        r = recv[i]
-        if r >= 0 and is_river[r]:
-            upstream_max[r] = max(upstream_max[r], accum[i])
-    heads = is_river & (upstream_max < accum * 0.5)  # cells not continued by a bigger branch
-
-    features = []
-    visited = np.zeros(n, bool)
-    for h in np.nonzero(heads)[0]:
-        if visited[h]:
-            continue
-        path = [int(h)]
-        cur = int(h)
-        while True:
-            visited[cur] = True
-            nxt = int(recv[cur])
-            if nxt < 0 or len(path) > 4000:
-                break
-            path.append(nxt)
-            if ocean[nxt] or visited[nxt] and nxt != path[-1]:
-                break
-            if visited[nxt]:
-                break
-            cur = nxt
-        if len(path) >= 5 and accum[path[-1]] > river_thr * 1.5:
-            coords = [[round(float(lonlat[i, 0]), 3), round(float(lonlat[i, 1]), 3)]
-                      for i in path]
-            features.append(feature("river", {"type": "LineString", "coordinates": coords},
-                                    {"discharge_m2": float(accum[path[-1]])}))
+    riv = rivers_mod.build(session)
+    features = list(riv["features"])
 
     # ---- suitability & settlements ----
     slope = np.zeros(n, np.float32)

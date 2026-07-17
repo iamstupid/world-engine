@@ -298,3 +298,52 @@ of Cortial et al. 2019 on an icosahedral geodesic grid. Plan and rationale:
   tests/py/test_astro.py (20 gates total: Kepler residual/closure/third
   law, IMF, LUT monotonicity, catalogs, parallax, galaxy morphology,
   store merge isolation). tests/py 35/35, e2e 8/8.
+
+---
+
+# Backend Batch: N=2048 Amplification, Tzathas 5.3, Vector Rivers, Refinement Pyramid, Novel Kit, Astro Leftovers
+
+## Date: 2026-07-17
+
+- Amplification stage (addendum b): when the geodesic physics grid
+  outresolves the export raster, cells gain attribute-modulated fractal
+  detail evaluated on the sphere (fBm plains + ridged orogens, modulated by
+  uplift rate and relief; faint abyssal hills). Octaves are capped per
+  multigrid level (~3 cell spacings), so coarse grids behave exactly as
+  before. New "amplify" param group; digest/schema updated.
+- Big-F validation: F=1024 = 10.5M cells, 25 s wall, 2.0 GB peak;
+  **F=2048 = 41.9M cells (~3.9 km), 116 s wall, 8.2 GB peak** on 32 cores
+  (parallel stable sorts via __gnu_parallel). N=2048 is practical.
+- Tzathas 5.3 optimization-based altitude correction: gradient descent in
+  elevation-difference space (d >= 0 preserves the network), river term
+  lam_r=1/3 vs discontinuity term lam_d=2/3 over non-connected neighbors,
+  gradients accumulated down the receiver tree and divided by upstream
+  node count. Pure-gather gradient (no atomics) keeps runs bitwise
+  deterministic. erosion.discontinuity_iterations (default 16).
+- Rhombus-atlas endpoints (addendum b): atlas.py packs any cell layer into
+  the 10 NxN zero-waste layout via weterrain.atlas_map (exact bijection +
+  2 pole cells); /cell_layer/{name} raw and /cell_atlas/{name}.
+- Vector rivers (addendum c): rivers.py — extraction with hydraulic
+  attributes (width from Leopold hydraulic geometry), deterministic
+  meander refinement (wavelength ~11 widths, endpoints pinned, bounded
+  amplitude), stream-burning into 'elevation_conditioned_m' (monotone bed
+  profiles), sub-threshold tributaries that trace the flow tree onto the
+  channel network. civ.py now consumes rivers.build();
+  minor_river features added.
+- M11.5 refinement pyramid: refine.py + /refine endpoint — tiles at
+  arbitrary bbox/scale with the 1-px border LOCKED to the global field,
+  world-anchored value-noise detail (overlapping tiles agree), local
+  priority-flood + D8 + analytical stream-power carving. Gates: boundary
+  continuity, determinism, relief gain, pit reduction.
+- M14 skeleton: novelkit.py — Project root, story-dated changesets
+  (staged -> author merge; preview on a store clone; drop of merged
+  refused), characters with location trails (validity intervals), travel
+  consistency (route-time violations incl. ship fallback) and news-arrival
+  knowledge checks. projects saved as .weproj JSON.
+- Astro leftovers: optional wide companion for the home star (second sun
+  with Kepler orbit, mag ~ -16 class), proper motion (25 km/s dispersion;
+  sky_from(epoch_yr) drifts charts across eras ~0.1-1 deg/millennium for
+  nearby stars). Fresh RNG streams keep default catalogs identical.
+- Tests: C++ 7/7 (new amplification/5.3 gates at F=224 incl. single-grid
+  Fig-4 reproduction), tests/py 51/51 (rivers 6, refine 2, novelkit 6,
+  astro +2), e2e 8/8 (param group count 5 -> 6).

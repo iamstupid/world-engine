@@ -121,13 +121,19 @@ std::string Pipeline::params_digest(const PipelineParams& params) const {
       << tp.oceanic_dampening_mm_yr << ',' << tp.sediment_accretion_mm_yr << ','
       << tp.uplift_window_myr << ',' << tp.noise_detail_mix
       << '|';
+  oss << params.amplify.enable << ',' << params.amplify.base_frequency << ','
+      << params.amplify.octaves << ',' << params.amplify.gain << ','
+      << params.amplify.lacunarity << ',' << params.amplify.base_amplitude_m << ','
+      << params.amplify.mountain_amplitude_m << '|';
   oss << params.erosion.fixed_point_iterations << ',' << params.erosion.multigrid_levels
       << ',' << params.erosion.k << ',' << params.erosion.m << ','
       << params.erosion.time_years << ',' << params.erosion.enable_hillslope << ','
       << params.erosion.hillslope_k << ',' << params.erosion.hack_c << ','
       << params.erosion.hack_h << ',' << params.erosion.enable_thermal << ','
       << params.erosion.thermal_critical_slope << ','
-      << params.erosion.fixed_point_ema << '|';
+      << params.erosion.fixed_point_ema << ','
+      << params.erosion.discontinuity_iterations << ','
+      << params.erosion.discontinuity_lr << '|';
   oss << params.hydrology.river_area_threshold_m2 << ',' << params.hydrology.sea_level_m
       << ',' << params.hydrology.flood_lowstand_m << '|';
   for (const auto& [name, paint] : params.paint_layers) {

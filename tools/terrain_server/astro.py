@@ -262,6 +262,10 @@ class UniverseSpec:
     home_star_mass: float = 1.0
     binary_fraction: float = 0.22
     named_star_count: int = 160
+    # Optional wide companion for the home star: {"mass_ratio", "a_au", "e"}.
+    # None keeps the home system single (and the default catalogs identical).
+    home_companion: dict | None = None
+    proper_motion_kms: float = 25.0  # 1D velocity dispersion of field stars
     moons: list = field(default_factory=lambda: [
         {"name": "Moon", "period_days": 29.5, "phase0": 0.0,
          "inclination_deg": 5.0}])
@@ -329,9 +333,41 @@ class Universe:
 
         self._build_home_system(rng)
         self.names: dict[int, str] = {}
-        self._catalog_cache: dict[int, dict] = {}
+        self._catalog_cache: dict[tuple, dict] = {}
         self._assign_names(rng)
         self._build_constellations(rng)
+
+        # Late additions draw from FRESH streams so default worlds keep the
+        # exact catalogs of earlier versions.
+        rng_v = np.random.default_rng((spec.seed ^ 0x51AB) * 977 + 5)
+        kms_to_pc_yr = 1.0227e-6
+        self.vel = (rng_v.normal(0, 1, (self.n_systems, 3))
+                    * spec.proper_motion_kms * kms_to_pc_yr)
+        self.vel[0] = 0.0  # the frame comoves with home
+
+        self.home_companion_orbit = None
+        if spec.home_companion:
+            rng_c = np.random.default_rng((spec.seed * 31 + 0xC0) % (2 ** 63))
+            comp_spec = spec.home_companion
+            q = float(comp_spec.get("mass_ratio", 0.5))
+            a_c = float(comp_spec.get("a_au", 40.0))
+            e_c = float(comp_spec.get("e", 0.1))
+            self.mass2[0] = self.mass[0] * q
+            comp_lum = float(mass_luminosity(np.array([max(0.081, self.mass2[0])]))[0])
+            self.lum[0] = float(self.lum[0]) + comp_lum
+            self.companion_lum = comp_lum
+            home = self.planets[self.home_planet_idx]
+            a_home = home["a"]
+            m1 = float(self.mass[0])
+            period = (self.spec.year_days
+                      * math.sqrt((a_c / a_home) ** 3 * (m1 / (m1 + self.mass2[0]))))
+            inc = math.radians(float(rng_c.uniform(0.0, 8.0)))
+            self.home_companion_orbit = {
+                "a": a_c, "e": e_c, "M0": float(rng_c.uniform(0, TWO_PI)),
+                "period_days": period,
+                "rot": orbit_matrix(inc, float(rng_c.uniform(0, TWO_PI)),
+                                    float(rng_c.uniform(0, TWO_PI))),
+            }
 
     # ---- home system ----
 
@@ -387,12 +423,20 @@ class Universe:
         d = np.linalg.norm(self.sys_pos[ids] - self.sys_pos[observer], axis=-1)
         return self.mv[ids] + 5.0 * (np.log10(np.maximum(d, 1e-6)) - 1.0)
 
-    def naked_eye(self, observer: int = 0) -> dict:
+    def positions_at(self, epoch_yr: float = 0.0) -> np.ndarray:
+        """System positions at a story epoch (proper motion; pc)."""
+        if abs(epoch_yr) < 1e-9:
+            return self.sys_pos
+        return self.sys_pos + self.vel * epoch_yr
+
+    def naked_eye(self, observer: int = 0, epoch_yr: float = 0.0) -> dict:
         """Stars visible (mag < limit) from a system.  Directions are unit
         vectors in the GALACTIC frame (rotation-invariant comparisons)."""
-        if observer in self._catalog_cache:
-            return self._catalog_cache[observer]
-        rel = self.sys_pos - self.sys_pos[observer]
+        key = (observer, round(float(epoch_yr), 1))
+        if key in self._catalog_cache:
+            return self._catalog_cache[key]
+        pos = self.positions_at(epoch_yr)
+        rel = pos - pos[observer]
         d = np.linalg.norm(rel, axis=1)
         d[observer] = np.inf
         mag = self.mv + 5.0 * (np.log10(np.maximum(d, 1e-6)) - 1.0)
@@ -402,7 +446,7 @@ class Universe:
                "dirs": rel[order] / d[order, None],
                "dist_pc": d[order],
                "mag": mag[order]}
-        self._catalog_cache[observer] = cat
+        self._catalog_cache[key] = cat
         return cat
 
     def _assign_names(self, rng: np.random.Generator):
@@ -462,10 +506,12 @@ class Universe:
 
     # ---- JSON views ----
 
-    def sky_from(self, observer: int = 0, limit: int = 900) -> dict:
+    def sky_from(self, observer: int = 0, limit: int = 900,
+                 epoch_yr: float = 0.0) -> dict:
         """Naked-eye chart from any system (galactic-frame unit dirs) with
-        home-culture constellation shapes recomputed for that observer."""
-        cat = self.naked_eye(observer)
+        home-culture constellation shapes recomputed for that observer and
+        story epoch (proper motion distorts charts over eras)."""
+        cat = self.naked_eye(observer, epoch_yr)
         take = min(limit, len(cat["ids"]))
         stars = [{"sys": int(s), "name": self.names.get(int(s)),
                   "dir": [round(float(v), 5) for v in cat["dirs"][k]],
@@ -473,10 +519,11 @@ class Universe:
                   "dist_pc": round(float(cat["dist_pc"][k]), 2),
                   "rgb": [int(v) for v in self.rgb[int(s)]]}
                  for k, s in enumerate(cat["ids"][:take])]
-        obs_pos = self.sys_pos[observer]
+        pos = self.positions_at(epoch_yr)
+        obs_pos = pos[observer]
         cons = []
         for con in self.constellations:
-            rel = self.sys_pos[con["star_ids"]] - obs_pos
+            rel = pos[con["star_ids"]] - obs_pos
             dist = np.linalg.norm(rel, axis=1)
             if np.any(dist < 1e-6):
                 continue  # observer sits on a member star
@@ -484,6 +531,7 @@ class Universe:
                          "dirs": np.round(rel / dist[:, None], 5).tolist(),
                          "edges": con["edges"]})
         return {"observer": int(observer), "frame": "galactic",
+                "epoch_yr": float(epoch_yr),
                 "mag_limit": self.spec.mag_limit, "stars": stars,
                 "constellations": cons}
 
@@ -603,6 +651,19 @@ class Observatory:
             cat = self.u.naked_eye(0)
             self._eq_dirs = cat["dirs"] @ self.u.gal2eq.T
         return self.u.naked_eye(0), self._eq_dirs
+
+    def companion_dir_mag(self, t: float):
+        """Direction/magnitude of the home star's wide companion (a second
+        sun), or None for single-star homes. The planet is assumed to orbit
+        the primary (valid for companion a >> planet a)."""
+        orbit = self.u.home_companion_orbit
+        if orbit is None:
+            return None
+        rel = orbit_pos(orbit, t) - self._home_pos(t)
+        d = float(np.linalg.norm(rel))
+        flux = self.u.companion_lum / max(1e-12, d * d)
+        mag = SUN_APP_MAG_1AU - 2.5 * math.log10(max(flux, 1e-30))
+        return self._ecl @ (rel / d), mag
 
     # ---- observer frame ----
 
@@ -738,11 +799,18 @@ class Observatory:
                               "mag": round(float(cat["mag"][idx]), 2),
                               "rgb": [int(v) for v in self.u.rgb[sid]]})
 
-        return {"t": t, "period": period,
-                "sun": {"alt": round(sun_alt, 1), "az": round(sun_az, 1)},
-                "moons": moons, "moonlight": round(moonlight, 3),
-                "constellations": visible_cons[:10],
-                "planets": planets, "stars": stars}
+        out = {"t": t, "period": period,
+               "sun": {"alt": round(sun_alt, 1), "az": round(sun_az, 1)},
+               "moons": moons, "moonlight": round(moonlight, 3),
+               "constellations": visible_cons[:10],
+               "planets": planets, "stars": stars}
+        comp = self.companion_dir_mag(t)
+        if comp is not None:
+            cdir, cmag = comp
+            calt, caz = self.alt_az(cdir, lat_deg, lon_deg, t)
+            out["companion_star"] = {"alt": round(calt, 1), "az": round(caz, 1),
+                                     "mag": round(cmag, 1), "up": calt > 0}
+        return out
 
 
 def build_universe(seed: int, year_days: float = 360.0,
